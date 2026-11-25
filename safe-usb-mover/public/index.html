@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SafeMover · 防掉盘渐进式安全搬运助手</title>
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --card: #131823;
+      --elev: #1a2130;
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #eef2f7;
+      --muted: #8b95a7;
+      --blue: #3b82f6;
+      --green: #10b981;
+      --amber: #f59e0b;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    .container { max-width: 1180px; margin: 0 auto; padding: 22px 20px 40px; }
+    header {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;
+      padding-bottom: 18px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .logo {
+      width: 42px; height: 42px; border-radius: 12px;
+      background: linear-gradient(135deg, #2563eb, #10b981);
+      display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 700;
+      box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
+    }
+    .brand h1 { font-size: 19px; font-weight: 700; letter-spacing: -0.2px; }
+    .brand p { font-size: 12px; color: var(--muted); }
+    .badge {
+      display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; border-radius: 999px;
+      font-size: 13px; font-weight: 600; background: var(--elev); border: 1px solid var(--border);
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+    .dot.running { background: var(--green); box-shadow: 0 0 10px var(--green); animation: pulse 1.5s infinite; }
+    .dot.warn { background: var(--amber); box-shadow: 0 0 10px var(--amber); animation: pulse 1.2s infinite; }
+    .dot.err { background: var(--red); box-shadow: 0 0 10px var(--red); animation: pulse 0.9s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 18px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 18px 20px; margin-bottom: 18px;
+    }
+    .card-title {
+      font-size: 14px; font-weight: 700; margin-bottom: 14px; display: flex;
+      align-items: center; justify-content: space-between; color: #f8fafc;
+    }
+    .card-sub { font-size: 12px; color: var(--muted); font-weight: 400; }
+
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+    .input-row { display: flex; gap: 8px; }
+    input[type="text"], input[type="number"], select {
+      width: 100%; background: var(--elev); border: 1px solid var(--border); color: var(--text);
+      padding: 9px 12px; border-radius: 10px; font-size: 13px; outline: none; transition: border-color .15s;
+    }
+    input:focus, select:focus { border-color: var(--blue); }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 9px 15px; border-radius: 10px; font-size: 13px; font-weight: 600;
+      border: 1px solid var(--border); background: var(--elev); color: var(--text);
+      cursor: pointer; transition: all .15s; white-space: nowrap;
+    }
+    .btn:hover { background: #242d40; }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: var(--blue); border-color: transparent; color: #fff; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-danger { background: rgba(239, 68, 68, 0.16); border-color: rgba(239, 68, 68, 0.4); color: #fca5a5; }
+    .btn-danger:hover { background: rgba(239, 68, 68, 0.28); }
+    .btn-lg { padding: 12px 24px; font-size: 14px; border-radius: 12px; }
+
+    /* Drives list */
+    .drives-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .drive-chip {
+      background: var(--elev); border: 1px solid var(--border); border-radius: 12px;
+      padding: 10px 12px; cursor: pointer; transition: all .15s; text-align: left; color: var(--text);
+    }
+    .drive-chip:hover { border-color: rgba(59,130,246,0.55); transform: translateY(-1px); }
+    .drive-chip.selected { border-color: var(--blue); background: rgba(59,130,246,0.14); }
+    .drive-chip.removable { border-left: 3px solid var(--green); }
+    .drive-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; }
+    .drive-type { font-size: 10px; padding: 2px 6px; border-radius: 999px; background: rgba(16,185,129,0.15); color: #34d399; }
+    .drive-type.local { background: rgba(148,163,184,0.15); color: #94a3b8; }
+    .drive-bar { height: 5px; background: rgba(255,255,255,0.09); border-radius: 999px; overflow: hidden; margin: 7px 0 5px; }
+    .drive-bar-fill { height: 100%; background: var(--blue); border-radius: 999px; }
+    .drive-meta { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    /* Presets */
+    .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+    .preset-btn {
+      background: var(--elev); border: 1px solid var(--border); border-radius: 12px; padding: 10px;
+      cursor: pointer; text-align: left; color: var(--text); transition: all .15s;
+    }
+    .preset-btn.active { border-color: var(--green); background: rgba(16, 185, 129, 0.12); }
+    .preset-btn strong { display: block; font-size: 13px; margin-bottom: 2px; }
+    .preset-btn span { font-size: 11px; color: var(--muted); display: block; }
+
+    .params-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .check-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 9px 12px; background: var(--elev); border-radius: 10px; font-size: 12.5px; cursor: pointer;
+    }
+    .check-row input { width: 16px; height: 16px; accent-color: var(--blue); }
+
+    /* Live Monitor */
+    .status-banner {
+      padding: 14px 16px; border-radius: 12px; background: var(--elev); border: 1px solid var(--border);
+      margin-bottom: 14px;
+    }
+    .status-banner.disconnected { border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.1); }
+    .status-banner.copying { border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.1); }
+    .status-banner.verifying { border-color: rgba(16,185,129,0.5); background: rgba(16,185,129,0.1); }
+    .status-banner.cooldown { border-color: rgba(245,158,11,0.45); background: rgba(245,158,11,0.09); }
+
+    .progress-track { height: 9px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; margin: 10px 0 6px; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width .18s linear; border-radius: 999px; }
+
+    .stats-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
+    .stat-box { background: var(--elev); border-radius: 12px; padding: 12px; border: 1px solid var(--border); }
+    .stat-label { font-size: 11px; color: var(--muted); }
+    .stat-val { font-size: 18px; font-weight: 700; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+    /* Log console */
+    .log-box {
+      height: 310px; overflow-y: auto; background: #090c12; border: 1px solid var(--border);
+      border-radius: 12px; padding: 10px 12px; font-family: Consolas, 'JetBrains Mono', monospace; font-size: 12px;
+    }
+    .log-line { padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,0.04); display: flex; gap: 8px; }
+    .log-time { color: #64748b; flex-shrink: 0; }
+    .log-ok { color: #34d399; }
+    .log-warn { color: #fbbf24; }
+    .log-err { color: #f87171; }
+    .log-info { color: #cbd5e1; }
+
+    .shield-steps {
+      display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; color: #93c5fd;
+      background: rgba(59,130,246,0.09); border: 1px solid rgba(59,130,246,0.2);
+      padding: 9px 12px; border-radius: 10px; margin-bottom: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="logo">🛡️</div>
+        <div>
+          <h1>SafeMover · 防掉盘渐进式安全搬运助手</h1>
+          <p>专为老旧移动硬盘 / U 盘设计：有空间就一点点搬 · 限速散热防掉盘 · 落盘回读 SHA-256 校验通过才删源</p>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div class="badge" id="phaseBadge">
+          <span class="dot" id="phaseDot"></span>
+          <span id="phaseLabel">待机中</span>
+        </div>
+        <button class="btn btn-primary btn-lg" id="btnStart" onclick="startTask()">▶ 启动自动监控搬运</button>
+        <button class="btn btn-danger btn-lg" id="btnStop" onclick="stopTask()" style="display:none;">⏹ 安全停止</button>
+      </div>
+    </header>
+
+    <div class="grid">
+      <!-- LEFT COLUMN: Folder & Anti-Disconnect Configuration -->
+      <div>
+        <div class="card">
+          <div class="card-title">
+            <span>1. 选择 PC 源文件夹与移动设备目标</span>
+            <button class="btn" style="padding:5px 10px; font-size:12px;" onclick="loadDrives()">🔄 刷新磁盘列表</button>
+          </div>
+
+          <div class="field">
+            <label>PC 源文件夹（待搬出文件的目录）</label>
+            <div class="input-row">
+              <input type="text" id="sourceDir" placeholder="例如：D:\Downloads\待转移" onchange="saveFields()" />
+              <button class="btn" onclick="pickFolder('sourceDir')">📂 浏览</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>快捷选择已连接的磁盘（绿色边框为可移动 U 盘 / SD 卡，点击自动填入）</label>
+            <div class="drives-grid" id="drivesGrid">
+              <div style="font-size:12px;color:var(--muted);">正在扫描磁盘...</div>
+            </div>
+          </div>
+
+          <div class="field" style="margin-bottom:0;">
+            <label>移动设备目标文件夹（会自动按卷标追踪，掉盘换盘符也能认出）</label>
+            <div class="input-row">
+              <input type="text" id="targetDir" placeholder="例如：E:\Backup" onchange="saveFields()" />
+              <button class="btn" onclick="pickFolder('targetDir')">📂 浏览</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>2. 老旧设备防掉盘 & 安全策略</span>
+            <span class="card-sub">全链路原子保护，绝不直接 Move</span>
+          </div>
+
+          <div class="shield-steps">
+            <span>① 检测余量</span> → <span>② 限速写 .part 临时文件</span> → <span>③ fsync 强制落盘</span> → <span>④ 回读 SHA-256 校验</span> → <span>⑤ 原子改名后再删 PC 源</span>
+          </div>
+
+          <div class="presets">
+            <button class="preset-btn" id="preset-safe" onclick="applyPreset('safe')">
+              <strong>🐢 极致护盘（推荐）</strong>
+              <span>限速 10MB/s · 勤散热 · 留 1GB</span>
+            </button>
+            <button class="preset-btn" id="preset-balanced" onclick="applyPreset('balanced')">
+              <strong>⚖️ 均衡稳定</strong>
+              <span>限速 25MB/s · 留 500MB</span>
+            </button>
+            <button class="preset-btn" id="preset-fast" onclick="applyPreset('fast')">
+              <strong>🚀 高速校验</strong>
+              <span>不限速 · 仅保留 SHA-256 校验</span>
+            </button>
+          </div>
+
+          <div class="params-grid">
+            <div class="field">
+              <label>写入限速 (MB/s，0 为不限速，老盘建议 8~15)</label>
+              <input type="number" id="speedLimitMBs" min="0" max="500" step="1" onchange="saveFields('custom')" />
+            </div>
+            <div class="field">
+              <label>目标盘安全预留空间 (MB，防塞满损坏分区)</label>
+              <input type="number" id="reserveSpaceMB" min="50" max="50000" step="50" onchange="saveFields('custom')" />
+            </div>
+            <div class="field">
+              <label>每搬完 1 个文件冷却歇息 (毫秒)</label>
+              <input type="number" id="cooldownPerFileMs" min="0" max="30000" step="100" onchange="saveFields('custom')" />
+            </div>
+            <div class="field">
+              <label>每累计写入多少 MB 深度散热歇息 5 秒</label>
+              <input type="number" id="batchCooldownMB" min="0" max="10000" step="50" onchange="saveFields('custom')" />
+            </div>
+            <div class="field">
+              <label>校验通过后如何处理 PC 源文件</label>
+              <select id="deleteMode" onchange="saveFields()">
+                <option value="delete">校验 100% 通过后直接删除 PC 源文件</option>
+                <option value="recycle">校验通过后移至 Windows 回收站（更稳妥）</option>
+                <option value="keep">仅复制校验，暂不删除（演练模式）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>搬运文件顺序</label>
+              <select id="sortOrder" onchange="saveFields()">
+                <option value="oldest">最早修改优先（先入先出）</option>
+                <option value="smallest">小文件优先（快速腾出件数）</option>
+                <option value="largest">大文件优先</option>
+                <option value="name">按文件名顺序</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="params-grid" style="margin-top:4px;">
+            <label class="check-row">
+              <span>强制回读 SHA-256 校验（防假写入/坏块）</span>
+              <input type="checkbox" id="verifySha256" onchange="saveFields()" />
+            </label>
+            <label class="check-row">
+              <span>空间紧张时「见缝插针」先搬较小文件</span>
+              <input type="checkbox" id="smartFit" onchange="saveFields()" />
+            </label>
+            <label class="check-row">
+              <span>在目标盘保持原相对子目录结构</span>
+              <input type="checkbox" id="preserveTree" onchange="saveFields()" />
+            </label>
+            <label class="check-row">
+              <span>搬空后自动清理 PC 源目录里的空子文件夹</span>
+              <input type="checkbox" id="cleanEmptyDirs" onchange="saveFields()" />
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN: Live Telemetry, Progress & Audit Log -->
+      <div>
+        <div class="card">
+          <div class="card-title">
+            <span>实时搬运状态监控</span>
+            <button class="btn" style="padding:4px 10px; font-size:11px;" onclick="resetStats()">清空统计与日志</button>
+          </div>
+
+          <div class="status-banner" id="statusBanner">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+              <strong id="statusText" style="font-size:13.5px;">正在连接本地服务...</strong>
+              <span id="liveSpeed" style="font-size:12px; color:#60a5fa; font-variant-numeric:tabular-nums;"></span>
+            </div>
+            <div id="currentFileArea" style="display:none; margin-top:8px;">
+              <div style="font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="currentFileName"></div>
+              <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+              <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums;">
+                <span id="currentFileBytes">0 / 0</span>
+                <span id="currentFilePercent">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="stats-4">
+            <div class="stat-box">
+              <div class="stat-label">PC 待搬运队列</div>
+              <div class="stat-val" id="statPending">0 个</div>
+              <div class="drive-meta" id="statPendingBytes">0 B</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">移动设备当前剩余</div>
+              <div class="stat-val" id="statTargetFree">--</div>
+              <div class="drive-meta" id="statTargetMeta">未选择目标盘</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">本次已安全搬走</div>
+              <div class="stat-val" style="color:var(--green);" id="statMoved">0 个</div>
+              <div class="drive-meta" id="statMovedBytes">0 B</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">掉盘恢复 / 校验拦截</div>
+              <div class="stat-val" id="statGuard">0 / 0</div>
+              <div class="drive-meta">每次搬运均写入审计日志</div>
+            </div>
+          </div>
+
+          <div class="card-title" style="margin-bottom:8px;">
+            <span>实时作业日志</span>
+            <span class="card-sub">审计记录保存于 transfer.log.jsonl</span>
+          </div>
+          <div class="log-box" id="logBox"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentConfig = {};
+    let currentState = {};
+    let drivesCache = [];
+    let formInitialized = false;
+
+    const PRESETS = {
+      safe: { preset: 'safe', speedLimitMBs: 10, cooldownPerFileMs: 1500, batchCooldownMB: 300, batchCooldownSec: 5, reserveSpaceMB: 1024, verifySha256: true },
+      balanced: { preset: 'balanced', speedLimitMBs: 25, cooldownPerFileMs: 500, batchCooldownMB: 1024, batchCooldownSec: 3, reserveSpaceMB: 500, verifySha256: true },
+      fast: { preset: 'fast', speedLimitMBs: 0, cooldownPerFileMs: 150, batchCooldownMB: 0, batchCooldownSec: 0, reserveSpaceMB: 300, verifySha256: true },
+    };
+
+    function fmtBytes(b) {
+      b = Number(b || 0);
+      if (b < 1024) return b + ' B';
+      if (b < 1024 ** 2) return (b / 1024).toFixed(1) + ' KB';
+      if (b < 1024 ** 3) return (b / 1024 ** 2).toFixed(1) + ' MB';
+      return (b / 1024 ** 3).toFixed(2) + ' GB';
+    }
+
+    function syncFormFromConfig(cfg) {
+      const ids = ['sourceDir','targetDir','speedLimitMBs','reserveSpaceMB','cooldownPerFileMs','batchCooldownMB','deleteMode','sortOrder'];
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el && document.activeElement !== el && cfg[id] !== undefined) el.value = cfg[id];
+      }
+      for (const id of ['verifySha256','smartFit','preserveTree','cleanEmptyDirs']) {
+        const el = document.getElementById(id);
+        if (el && cfg[id] !== undefined) el.checked = Boolean(cfg[id]);
+      }
+      ['safe','balanced','fast'].forEach(p => {
+        document.getElementById('preset-' + p)?.classList.toggle('active', cfg.preset === p);
+      });
+    }
+
+    async function saveFields(forcePreset) {
+      const patch = {
+        sourceDir: document.getElementById('sourceDir').value.trim(),
+        targetDir: document.getElementById('targetDir').value.trim(),
+        speedLimitMBs: Number(document.getElementById('speedLimitMBs').value || 0),
+        reserveSpaceMB: Number(document.getElementById('reserveSpaceMB').value || 0),
+        cooldownPerFileMs: Number(document.getElementById('cooldownPerFileMs').value || 0),
+        batchCooldownMB: Number(document.getElementById('batchCooldownMB').value || 0),
+        deleteMode: document.getElementById('deleteMode').value,
+        sortOrder: document.getElementById('sortOrder').value,
+        verifySha256: document.getElementById('verifySha256').checked,
+        smartFit: document.getElementById('smartFit').checked,
+        preserveTree: document.getElementById('preserveTree').checked,
+        cleanEmptyDirs: document.getElementById('cleanEmptyDirs').checked,
+      };
+      if (forcePreset) patch.preset = forcePreset;
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+    }
+
+    async function applyPreset(name) {
+      const patch = PRESETS[name];
+      if (!patch) return;
+      syncFormFromConfig({ ...currentConfig, ...patch });
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+    }
+
+    async function pickFolder(inputId) {
+      const init = document.getElementById(inputId).value.trim();
+      const res = await fetch('/api/pick-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initialDir: init }),
+      });
+      const data = await res.json();
+      if (data.path) {
+        document.getElementById(inputId).value = data.path;
+        await saveFields();
+        renderDrives();
+      }
+    }
+
+    async function loadDrives() {
+      const res = await fetch('/api/drives');
+      const data = await res.json();
+      drivesCache = data.drives || [];
+      renderDrives();
+    }
+
+    function selectDrive(drive) {
+      const targetEl = document.getElementById('targetDir');
+      const sub = 'SafeMove_Backup';
+      targetEl.value = drive.letter + '\\' + sub;
+      fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetDir: targetEl.value, targetVolumeLabel: drive.label || '' }),
+      });
+      renderDrives();
+    }
+
+    function renderDrives() {
+      const grid = document.getElementById('drivesGrid');
+      const currentTarget = (document.getElementById('targetDir').value || '').toUpperCase();
+      if (!drivesCache.length) {
+        grid.innerHTML = '<div style="font-size:12px;color:var(--muted);">未检测到可用磁盘</div>';
+        return;
+      }
+      grid.innerHTML = drivesCache.map((d, idx) => {
+        const usedPct = d.totalBytes > 0 ? Math.round(((d.totalBytes - d.freeBytes) / d.totalBytes) * 100) : 0;
+        const selected = currentTarget.startsWith(d.letter);
+        const isRem = d.driveType === 2;
+        return `
+          <button type="button" class="drive-chip ${selected ? 'selected' : ''} ${isRem ? 'removable' : ''}" onclick="selectDrive(drivesCache[${idx}])">
+            <div class="drive-head">
+              <span>${d.letter} ${d.label || '未命名卷'}</span>
+              <span class="drive-type ${isRem ? '' : 'local'}">${isRem ? '可移动' : '磁盘'}</span>
+            </div>
+            <div class="drive-bar"><div class="drive-bar-fill" style="width:${usedPct}%; background:${usedPct > 90 ? '#ef4444' : isRem ? '#10b981' : '#3b82f6'}"></div></div>
+            <div class="drive-meta">剩余 ${fmtBytes(d.freeBytes)} / ${fmtBytes(d.totalBytes)}</div>
+          </button>`;
+      }).join('');
+    }
+
+    async function startTask() {
+      await saveFields();
+      const res = await fetch('/api/start', { method: 'POST' });
+      const data = await res.json();
+      if (!data.ok) alert(data.error || '无法启动');
+    }
+
+    async function stopTask() {
+      await fetch('/api/stop', { method: 'POST' });
+    }
+
+    async function resetStats() {
+      await fetch('/api/reset-stats', { method: 'POST' });
+    }
+
+    const PHASE_MAP = {
+      idle: ['待机中', ''],
+      scanning: ['扫描源目录', 'running'],
+      waiting_space: ['待命监测空间中', 'warn'],
+      copying: ['平稳写入中', 'running'],
+      syncing: ['fsync 强制落盘', 'running'],
+      verifying: ['回读校验 SHA-256', 'running'],
+      cooldown: ['主控冷却散热中', 'warn'],
+      disconnected: ['⚠️ 掉盘·等待重连', 'err'],
+      paused: ['已暂停', 'warn'],
+    };
+
+    function renderState(st, cfg) {
+      currentState = st;
+      currentConfig = cfg;
+      if (!formInitialized) {
+        syncFormFromConfig(cfg);
+        formInitialized = true;
+      } else {
+        // Keep preset highlight synced
+        ['safe','balanced','fast'].forEach(p => {
+          document.getElementById('preset-' + p)?.classList.toggle('active', cfg.preset === p);
+        });
+        if (document.activeElement !== document.getElementById('targetDir') && cfg.targetDir) {
+          document.getElementById('targetDir').value = cfg.targetDir;
+        }
+      }
+
+      const [label, dotCls] = PHASE_MAP[st.phase] || [st.phase, ''];
+      document.getElementById('phaseLabel').textContent = label;
+      document.getElementById('phaseDot').className = 'dot ' + dotCls;
+      document.getElementById('btnStart').style.display = st.running ? 'none' : 'inline-flex';
+      document.getElementById('btnStop').style.display = st.running ? 'inline-flex' : 'none';
+
+      const banner = document.getElementById('statusBanner');
+      banner.className = 'status-banner ' + (st.phase || '');
+      document.getElementById('statusText').textContent = st.statusText || '';
+
+      const cf = st.currentFile;
+      const cfArea = document.getElementById('currentFileArea');
+      if (cf) {
+        cfArea.style.display = 'block';
+        document.getElementById('currentFileName').textContent = cf.relPath;
+        document.getElementById('progressFill').style.width = (cf.percent || 0) + '%';
+        document.getElementById('currentFilePercent').textContent = (cf.percent || 0) + '%';
+        const bytesShown = cf.phase === 'verifying' ? cf.verifiedBytes : cf.copiedBytes;
+        document.getElementById('currentFileBytes').textContent =
+          (cf.phase === 'verifying' ? '已回读 ' : '已写入 ') + fmtBytes(bytesShown) + ' / ' + fmtBytes(cf.size);
+        document.getElementById('liveSpeed').textContent =
+          cf.phase === 'copying' ? `${cf.speedMBs || 0} MB/s` : cf.phase === 'verifying' ? 'SHA-256 校验中' : 'fsync...';
+      } else {
+        cfArea.style.display = 'none';
+        document.getElementById('liveSpeed').textContent = '';
+      }
+
+      document.getElementById('statPending').textContent = (st.sourceStats?.pendingCount || 0) + ' 个';
+      document.getElementById('statPendingBytes').textContent = '共 ' + fmtBytes(st.sourceStats?.pendingBytes || 0);
+
+      const td = st.targetDrive;
+      if (td && td.online) {
+        document.getElementById('statTargetFree').textContent = fmtBytes(td.freeBytes);
+        document.getElementById('statTargetFree').style.color = '#34d399';
+        document.getElementById('statTargetMeta').textContent =
+          `${td.letter} ${td.label || ''} · 总容量 ${fmtBytes(td.totalBytes)}`;
+      } else if (td && !td.online) {
+        document.getElementById('statTargetFree').textContent = '离线';
+        document.getElementById('statTargetFree').style.color = '#f87171';
+        document.getElementById('statTargetMeta').textContent = `${td.letter} 未连接或已掉盘`;
+      } else {
+        document.getElementById('statTargetFree').textContent = '--';
+        document.getElementById('statTargetFree').style.color = 'var(--text)';
+        document.getElementById('statTargetMeta').textContent = '未选择目标盘';
+      }
+
+      document.getElementById('statMoved').textContent = (st.sessionStats?.movedFiles || 0) + ' 个';
+      document.getElementById('statMovedBytes').textContent = fmtBytes(st.sessionStats?.movedBytes || 0);
+      document.getElementById('statGuard').textContent =
+        `${st.sessionStats?.disconnectRecoveries || 0} 次 / ${st.sessionStats?.verifyFailures || 0} 次`;
+
+      const logBox = document.getElementById('logBox');
+      logBox.innerHTML = (st.logs || []).map(l =>
+        `<div class="log-line"><span class="log-time">[${l.time}]</span><span class="log-${l.level}">${escapeHtml(l.msg)}</span></div>`
+      ).join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+    }
+
+    // Boot
+    loadDrives();
+    setInterval(loadDrives, 8000);
+    const es = new EventSource('/api/events');
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        renderState(data.state, data.config);
+      } catch {}
+    };
+  </script>
+</body>
+</html>

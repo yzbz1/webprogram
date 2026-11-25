@@ -5,8 +5,10 @@ dist/
 
 # Logs & local runtime state
 *.log
+*.log.jsonl
 npm-debug.log*
 **/user-state.json
+safe-usb-mover/config.json
 
 # Environment & OS files
 .env
