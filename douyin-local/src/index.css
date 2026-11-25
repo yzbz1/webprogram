@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --dy-bg: #060716;
+    --dy-surface: #161823;
+    --dy-surface-elevated: #202230;
+    --dy-red: #fe2c55;
+    --dy-cyan: #25f4ee;
+    --dy-yellow: #face15;
+    --dy-border: rgba(255, 255, 255, 0.08);
+  }
+
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: var(--dy-bg);
+    color: rgba(255, 255, 255, 0.94);
+    font-family: 'PingFang SC', 'Inter', -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', sans-serif;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.dy-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.dy-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dy-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+.dy-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+@keyframes dy-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-dy-disc {
+  animation: dy-spin 6s linear infinite;
+}
+
+@keyframes dy-heart-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.4) rotate(var(--heart-rot, 0deg));
+  }
+  25% {
+    opacity: 1;
+    transform: translate(-50%, -55%) scale(1.22) rotate(var(--heart-rot, 0deg));
+  }
+  55% {
+    opacity: 0.96;
+    transform: translate(-50%, -65%) scale(1) rotate(var(--heart-rot, 0deg));
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -115%) scale(1.45) rotate(var(--heart-rot, 0deg));
+  }
+}
+
+.animate-dy-heart {
+  animation: dy-heart-pop 0.85s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes dy-like-bounce {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.32); }
+  65% { transform: scale(0.92); }
+  100% { transform: scale(1); }
+}
+
+.animate-like-bounce {
+  animation: dy-like-bounce 0.36s ease-out;
+}
+
+@keyframes dy-marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-dy-marquee {
+  animation: dy-marquee 12s linear infinite;
+}
