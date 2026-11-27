@@ -17,6 +17,14 @@ webprogram/
 │   ├── 启动-安全搬运助手.bat
 │   ├── 停止-安全搬运助手.bat
 │   └── 开机静默启动-安全搬运助手.vbs
+├── dsh-plugin-incident-drawer/         # DeepSeek Harness 右侧悬浮事件单插件
+│   ├── scripts/install-local.bat
+│   └── scripts/pack-offline.bat
+├── chrome-incident-drawer/             # Chrome MV3 网页右侧悬浮事件单扩展（与 DSH 共享 Excel）
+│   ├── start-bridge.bat
+│   ├── start-bridge-silent.vbs
+│   ├── stop-bridge.bat
+│   └── extension/
 └── README.md
 ```
 
@@ -52,6 +60,17 @@ webprogram/
   - **防掉盘原子五步搬运**：限速写入 `.safemove.part` → `fsync` 落盘 → 回读 `SHA-256` 校验 → 原子改名 → 校验无误才删源（或移入回收站），搭配冷却散热与掉盘自动重连自愈。
   - **独立启停脚本**：`safe-usb-mover/` 内自带 `启动-安全搬运助手.bat`、`停止-安全搬运助手.bat` 与 `开机静默启动-安全搬运助手.vbs`。
 
+### 4. DeepSeek Harness 事件单悬浮侧边栏 (`dsh-plugin-incident-drawer`)
+
+- **技术栈**：Cordis 双端插件（Host Excel 无损读写 + Client `shell.overlay` React 悬浮抽屉，零运行时外部依赖）
+- **核心功能**：贴合 DSH 右侧边缘、悬停向左展开单号、点击手风琴展开动态表头编辑、第 1 列只读超链接跳转、失焦自动保存与外部变更防覆盖。详见 [dsh-plugin-incident-drawer/README.md](dsh-plugin-incident-drawer/README.md)。
+
+### 5. Chrome 事件单悬浮侧边栏 (`chrome-incident-drawer`)
+
+- **默认伴生服务地址**：`http://127.0.0.1:17892/`
+- **技术栈**：Chrome Manifest V3（Shadow DOM 隔离 UI）+ 零依赖本地 Node 伴生服务
+- **核心功能**：与 DSH 插件共用同一份配置与本地 Excel，支持网页右侧悬浮编辑、黑白名单域名规则及深浅色主题。详见 [chrome-incident-drawer/README.md](chrome-incident-drawer/README.md)。
+
 ---
 
 ## 使用方式
@@ -63,6 +82,8 @@ webprogram/
 - **抖音本地版**（`douyin-local/`）：双击 `启动-抖音本地版.bat`（端口 `3002`） / `停止-抖音本地版.bat` / `开机静默启动-抖音本地版.vbs`
 - **特斯拉行车记录仪**（`tesla-dashcam/`）：双击 `启动-特斯拉行车记录仪.bat`（端口 `3000`） / `停止-特斯拉行车记录仪.bat`
 - **防掉盘安全搬运助手**（`safe-usb-mover/`）：双击 `启动-安全搬运助手.bat`（端口 `3005`） / `停止-安全搬运助手.bat` / `开机静默启动-安全搬运助手.vbs`
+- **Chrome 事件单悬浮侧边栏**（`chrome-incident-drawer/`）：双击 `start-bridge-silent.vbs`（端口 `17892`） / `start-bridge.bat` / `stop-bridge.bat`，再于 Chrome `chrome://extensions/` 加载 `extension/` 目录
+- **DSH 事件单悬浮侧边栏**（`dsh-plugin-incident-drawer/`）：执行 `scripts\pack-offline.bat` 或 `scripts\install-local.bat` 安装至 DSH
 
 > 如需开机自启，请右键对应 `.vbs` **创建快捷方式**后拖入 `Win + R` → `shell:startup`（不要移动原 `.vbs` 文件）。
 

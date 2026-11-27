@@ -1,0 +1,24 @@
+{
+  "name": "chrome-incident-drawer",
+  "version": "1.0.0",
+  "description": "Chrome MV3 floating right-edge incident ticket drawer sharing Excel and config with DeepSeek Harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test-bridge.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "esbuild": "^0.25.0",
+    "exceljs": "^4.4.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "typescript": "^5.7.0"
+  }
+}

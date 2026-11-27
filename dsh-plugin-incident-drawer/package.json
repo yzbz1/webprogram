@@ -1,0 +1,54 @@
+{
+  "name": "dsh-plugin-incident-drawer",
+  "version": "1.0.0",
+  "description": "Floating right-edge incident ticket drawer plugin for DeepSeek Harness backed by local Excel (.xlsx)",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/excel-store.cjs",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "sample/incidents.xlsx"
+  ],
+  "engines": {
+    "dsh": ">=0.1.0 <2.0.0"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test-host.mjs",
+    "sample": "node scripts/create-sample-excel.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "esbuild": "^0.25.0",
+    "exceljs": "^4.4.0",
+    "react": "^18.3.0",
+    "typescript": "^5.7.0"
+  },
+  "license": "MIT"
+}

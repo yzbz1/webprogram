@@ -1,0 +1,3 @@
+- insert:
+    - id: incident-drawer
+      name: dsh-plugin-incident-drawer

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>DSH 事件单悬浮侧边栏</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #64748b;
+      --border: rgba(15, 23, 42, 0.12);
+      --accent: #4176e6;
+      --ok: #16a34a;
+      --err: #dc2626;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #18181b;
+        --card: #232326;
+        --text: #f4f4f5;
+        --muted: #a1a1aa;
+        --border: rgba(255, 255, 255, 0.14);
+        --accent: #7aaaff;
+        --ok: #4ade80;
+        --err: #f87171;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 332px;
+      padding: 12px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .title {
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid var(--border);
+      background: var(--card);
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .dot.ok { background: var(--ok); }
+    .dot.err { background: var(--err); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .muted {
+      font-size: 11px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .btn {
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font: inherit;
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    select, input[type="number"], textarea {
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      outline: none;
+    }
+    textarea {
+      min-height: 58px;
+      resize: vertical;
+    }
+    label.switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .toast {
+      font-size: 11px;
+      color: var(--ok);
+      min-height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="title">事件单悬浮侧边栏</span>
+    <span class="badge" id="bridge-badge">
+      <span class="dot" id="bridge-dot"></span>
+      <span id="bridge-status">检测中...</span>
+    </span>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <span class="muted" id="excel-path">正在读取共享配置...</span>
+      <button type="button" class="btn" id="btn-recheck">刷新</button>
+    </div>
+    <div class="muted" id="bridge-hint" style="display:none; color: var(--err);">
+      本地伴生服务未运行，请双击项目根目录的 start-bridge-silent.vbs（或 start-bridge.bat）启动。
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label class="switch">
+        <input type="checkbox" id="chk-enabled" />
+        <span>启用网页右侧悬浮面板</span>
+      </label>
+    </div>
+    <div class="row" id="site-toggle-row" style="display:none;">
+      <span class="muted">当前站点：<strong id="current-host"></strong></span>
+      <button type="button" class="btn" id="btn-toggle-site">切换显示</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div>
+      <div class="muted" style="margin-bottom:4px;">显示范围模式</div>
+      <select id="sel-site-mode">
+        <option value="all-except">所有网页显示（下方填写排除域名）</option>
+        <option value="only-listed">仅在指定域名显示（支持 *.company.internal）</option>
+      </select>
+    </div>
+    <div>
+      <div class="muted" id="domains-label" style="margin-bottom:4px;">排除域名（每行一个）</div>
+      <textarea id="txt-domains" placeholder="例如：&#10;itsm.company.internal&#10;*.oa.internal"></textarea>
+    </div>
+    <div class="row">
+      <div style="flex:1;">
+        <div class="muted" style="margin-bottom:4px;">主题外观</div>
+        <select id="sel-theme">
+          <option value="system">跟随系统</option>
+          <option value="light">浅色</option>
+          <option value="dark">深色</option>
+        </select>
+      </div>
+      <div style="width:92px;">
+        <div class="muted" style="margin-bottom:4px;">服务端口</div>
+        <input type="number" id="num-port" min="1" max="65535" />
+      </div>
+    </div>
+    <div class="row">
+      <span class="toast" id="save-toast"></span>
+      <button type="button" class="btn primary" id="btn-save">保存设置</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
