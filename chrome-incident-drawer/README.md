@@ -1,16 +1,16 @@
 # chrome-incident-drawer
 
-Chrome（Manifest V3）网页右侧悬浮事件单侧边栏扩展，交互与视觉风格 100% 复刻 DeepSeek Harness 插件（`dsh-plugin-incident-drawer`），并通过极简本机伴生服务与 DSH 插件**实时共享同一份配置文件与本地 Excel（`.xlsx`）**。
+Chrome（Manifest V3）网页右侧悬浮事件单侧边栏扩展，交互与视觉风格 100% 复刻 DeepSeek Harness 插件（`dsh-plugin-incident-drawer`），并通过极简本机伴生服务与 **DSH 插件**及 **Windows 桌面版（`win-incident-stage`）** 三端实时共享同一份配置文件与本地 Excel（`.xlsx`）。
 
 ---
 
 ## 一、功能特性
 
-- **与 DSH 插件实时双向共享**：共用 `$DSH_HOME/incident-drawer-config.json`（未设置 `DSH_HOME` 时为 `~/.dsh/incident-drawer-config.json`）。你在 DSH 或 Chrome 任意一端修改 Excel 路径、切换工作表或更新单据，另一端数秒内自动感知并提示刷新/防覆盖。
+- **与 DSH 插件、Windows 桌面端三端实时共享**：共用 `$DSH_HOME/incident-drawer-config.json`（未设置 `DSH_HOME` 时为 `~/.dsh/incident-drawer-config.json`）。你在 DSH、Chrome 或 Windows 桌面端任意一端修改 Excel 路径、切换工作表或更新单据，其余端数秒内自动感知并提示刷新/防覆盖。
 - **网页悬浮不挤占布局**：基于 **Shadow DOM** 样式隔离挂载在网页最右侧边缘，空白区域完全鼠标穿透（`pointer-events: none !important`），不污染原网页样式，也不影响划词、滚动与点击。
 - **三态阶梯交互 + 自适应排版**：
   - 默认仅 `74px` 缩在右边缘；鼠标悬停单条向左展开完整单号；点击以手风琴卡片展开（带立体悬浮阴影，左边缘支持拖拽调宽 `280px–540px`）。
-  - 直接读取 Excel 第 1 行表头作为字段名称（支持任意列数），输入框高度随文本内容与卡片宽度自动伸缩。
+  - 直接读取 Excel 第 1 行表头作为字段名称（支持任意列数）；当包含「服务分类」「服务子分类」时合并在同一行联动下拉选择；卡片圆点与悬停标签自动计算 `SLA 到期时间`（工作日 `08:30–18:00` 剩余工时：`<4h` 红、`4–8h` 黄、`>8h` 绿，悬停显示如 `2.2h`）。
   - 第 1 列单号只读并自动识别超链接，顶栏点 **`打开`** 按钮直接在新标签页打开原工单。
   - 失焦自动无损写回 Excel，完整保留第 11 行起数据、超链接与其他日期工作表。
 - **灵活的网站显示规则**：通过浏览器右上角扩展弹窗，可一键在当前站点隐藏/显示、切换“所有网页显示（排除列表）”或“仅限内网域名显示（支持 `*.company.internal`）”、切换跟随系统/浅色/深色外观。
@@ -61,7 +61,28 @@ Chrome（Manifest V3）网页右侧悬浮事件单侧边栏扩展，交互与视
 - **切换 Excel / 工作表**：点击右上角工具栏 **齿轮 `⚙`**，可修改 `.xlsx` 路径、切换不同日期工作表或生成示例表（修改后同样同步给 DSH）。
 - **临时收起**：点工具栏最右侧 **`»`** 缩成右边缘微小耳片，不遮挡网页。
 
-### 2. 工具栏弹窗设置（网站显示范围 / 主题 / 端口）
+### 2. Excel 表格格式约定
+
+工作簿格式与 `sample/incidents.xlsx`（以及 `../win-incident-stage/incidents-template.xlsx`）一致：
+
+- **工作表与行数**：默认优先匹配当日 `YYYYMMDD`（如 `20261128`）工作表，加载第 2–11 行**前 10 条非空行**；第 12 行及之后的数据在写回时完整原样保留。
+- **标准 9 列字段（第 1 行表头）**：
+
+| 列 | 表头名称 | 说明 |
+| --- | --- | --- |
+| A | `事件单号` | **只读**，支持原生超链接、`=HYPERLINK("url","文本")` 或纯 `http(s)://` 链接 |
+| B | `标题` | 业务标题 |
+| C | `问题描述` | 多行长文本 |
+| D | `服务分类` | 一级分类下拉；展开卡片时与「服务子分类」合并在同一行展示 |
+| E | `服务子分类` | 二级联动下拉（修改一级分类时若子分类不匹配会原子重置） |
+| F | `解决方案：` | 多行长文本 |
+| G | `SLA 到期时间` | `YYYY-MM-DD HH:mm` 格式（表头含 `SLA` 或 `到期时间` 即可识别）；仅统计周一至周五 `08:30–18:00` 剩余工时：`<4h` 红色、`4–8h` 黄色、`>8h` 绿色，悬停标签显示如 `2.2h` / `超时`，展开字段旁显示 `工作剩余 X.Xh` |
+| H | `提单人` | 短文本 |
+| I | `处理群组（welink群）` | 短文本 |
+
+- **联动字典工作表 `服务分类字典`**：在工作表下拉列表中自动隐藏；第 1 行为一级分类名称，第 2 行起为各分类对应的二级子分类（内置 `基础架构` / `应用系统` / `中间件与数据` / `发布与运维` 各 3 个子分类）。
+
+### 3. 工具栏弹窗设置（网站显示范围 / 主题 / 端口）
 
 点击 Chrome 工具栏上的插件图标，打开控制面板：
 - **服务状态**：实时显示 `已连接`（及当前共享的 Excel 路径）或 `未连接`；点「刷新」可重新检测。
@@ -75,7 +96,7 @@ Chrome（Manifest V3）网页右侧悬浮事件单侧边栏扩展，交互与视
     ```
 - **主题外观 & 服务端口**：支持 `跟随系统 / 浅色 / 深色`；若本地端口 `17892` 被占用，启动伴生服务时可设环境变量 `BRIDGE_PORT=新端口`，并在此同步修改端口后点「保存设置」。
 
-### 3. 常见问题排查
+### 4. 常见问题排查
 
 - **网页右侧显示「服务未启动」**：本机伴生服务未运行，双击 `start-bridge-silent.vbs` 启动后点面板上的「重连」即可。
 - **修改路径后 DSH 和 Chrome 没同步**：确认两边运行在同一系统用户且 `DSH_HOME` 环境变量一致（两边均读写 `$DSH_HOME/incident-drawer-config.json` 或 `~/.dsh/incident-drawer-config.json`）。
@@ -93,12 +114,14 @@ chrome-incident-drawer/
 ├── README.md
 ├── bridge/                   # 预打包的零依赖本机服务（server.mjs + excel-store.cjs）
 ├── extension/                # Chrome MV3 扩展目录（manifest.json + scripts + icons）
-├── sample/incidents.xlsx     # 兜底示例 Excel
+├── sample/incidents.xlsx     # 标准 9 列示例 Excel（含服务分类字典）
 ├── scripts/
 │   ├── build.mjs             # esbuild 构建脚本与 PNG 图标生成
 │   └── test-bridge.mjs       # 伴生服务安全校验与 Chrome<->DSH 共享 Excel E2E 测试
 └── src/
-    ├── shared/types.ts       # 前后端共享类型与配置定义
+    ├── shared/
+    │   ├── types.ts          # 前后端共享类型与配置定义
+    │   └── sla.ts            # 工作日 08:30–18:00 SLA 工时计算与红/黄/绿分级
     ├── bridge/               # 本机服务：配置同步、Excel 读写、HTTP 桥接
     └── extension/            # Chrome 扩展：Background SW、Shadow DOM UI、Popup
 ```

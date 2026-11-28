@@ -25,6 +25,7 @@ export interface DrawerSnapshot {
   readonly rows: readonly IncidentRow[]
   readonly version: string | null
   readonly totalDataRows: number
+  readonly categoryOptions?: Readonly<Record<string, readonly string[]>>
   readonly error?: string
 }
 

@@ -80,6 +80,32 @@ var api = {
   },
   showMusicContextMenu() {
     return import_electron.ipcRenderer.invoke("stage:music-context-menu");
+  },
+  adjustSystemVolume(direction, steps) {
+    return import_electron.ipcRenderer.invoke("stage:adjust-system-volume", direction, steps);
+  },
+  setMusicVolume(volume) {
+    return import_electron.ipcRenderer.invoke("stage:set-music-volume", volume);
+  },
+  getWebMusicState() {
+    return import_electron.ipcRenderer.invoke("stage:get-web-music-state");
+  },
+  onWebMusicState(cb) {
+    const handler = (_event, state) => cb(state);
+    import_electron.ipcRenderer.on("stage:web-music-state", handler);
+    return () => import_electron.ipcRenderer.removeListener("stage:web-music-state", handler);
+  },
+  webMusicControl(action) {
+    return import_electron.ipcRenderer.invoke("stage:web-music-control", action);
+  },
+  openWebMusicWindow(url) {
+    return import_electron.ipcRenderer.invoke("stage:open-web-music", url);
+  },
+  hideWebMusicWindow() {
+    return import_electron.ipcRenderer.invoke("stage:hide-web-music");
+  },
+  clearWebMusicSession() {
+    return import_electron.ipcRenderer.invoke("stage:clear-web-music-session");
   }
 };
 import_electron.contextBridge.exposeInMainWorld("stageApi", api);

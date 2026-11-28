@@ -108,6 +108,40 @@ const api: StageApi = {
   showMusicContextMenu(): Promise<void> {
     return ipcRenderer.invoke('stage:music-context-menu') as Promise<void>
   },
+
+  adjustSystemVolume(direction: 'up' | 'down', steps?: number): Promise<boolean> {
+    return ipcRenderer.invoke('stage:adjust-system-volume', direction, steps) as Promise<boolean>
+  },
+
+  setMusicVolume(volume: number): Promise<number> {
+    return ipcRenderer.invoke('stage:set-music-volume', volume) as Promise<number>
+  },
+
+  getWebMusicState(): Promise<MediaState> {
+    return ipcRenderer.invoke('stage:get-web-music-state') as Promise<MediaState>
+  },
+
+  onWebMusicState(cb: (state: MediaState) => void): () => void {
+    const handler = (_event: unknown, state: MediaState) => cb(state)
+    ipcRenderer.on('stage:web-music-state', handler)
+    return () => ipcRenderer.removeListener('stage:web-music-state', handler)
+  },
+
+  webMusicControl(action: 'prev' | 'next' | 'toggle'): Promise<boolean> {
+    return ipcRenderer.invoke('stage:web-music-control', action) as Promise<boolean>
+  },
+
+  openWebMusicWindow(url?: string): Promise<boolean> {
+    return ipcRenderer.invoke('stage:open-web-music', url) as Promise<boolean>
+  },
+
+  hideWebMusicWindow(): Promise<void> {
+    return ipcRenderer.invoke('stage:hide-web-music') as Promise<void>
+  },
+
+  clearWebMusicSession(): Promise<boolean> {
+    return ipcRenderer.invoke('stage:clear-web-music-session') as Promise<boolean>
+  },
 }
 
 contextBridge.exposeInMainWorld('stageApi', api)

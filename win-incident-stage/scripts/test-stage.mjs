@@ -24,8 +24,10 @@ async function runTests() {
       'dist-app/excel-store.cjs',
       'dist-app/main.cjs',
       'dist-app/preload.cjs',
+      'dist-app/web-music-preload.cjs',
       'dist-app/renderer.js',
       'dist-app/index.html',
+      'dist-app/web-music-start.html',
       'dist-app/media-helper.ps1',
       'assets/tray-icon.png',
       'assets/app-icon.png',
@@ -54,10 +56,19 @@ async function runTests() {
     assert.ok(rendererCode.includes('stg-drop-sphere'), 'renderer.js must include glass pearl music player')
     assert.ok(rendererCode.includes('stg-blackhole-halo'), 'renderer.js must include black-hole hover halo')
     assert.ok(rendererCode.includes('stg-horizon-orb'), 'renderer.js must include chromatic-horizon glass sphere SVG')
+    assert.ok(rendererCode.includes('stg-field-pair'), 'renderer.js must render 服务分类 & 服务子分类 on one row')
+    assert.ok(rendererCode.includes('stg-sla-pill'), 'renderer.js must display working-hours SLA remaining badge')
+    assert.ok(rendererCode.includes('stg-mini-sla'), 'renderer.js must display hover SLA hours pill beside badge')
+    assert.ok(rendererCode.includes('stg-water-level'), 'renderer.js must include dynamic water-level container')
+    assert.ok(rendererCode.includes('stg-water-wave-front'), 'renderer.js must include animated wave layer')
+    assert.ok(rendererCode.includes('stg-orb-vol-badge'), 'renderer.js must include volume HUD badge')
 
     const mainCode = readFileSync(resolve(root, 'dist-app/main.cjs'), 'utf8')
     assert.ok(mainCode.includes('stage:trigger-hotkey'), 'main.cjs must register trigger-hotkey IPC handler')
     assert.ok(mainCode.includes('Win+Shift+S'), 'main.cjs must include default hotkey traffic-light presets')
+    assert.ok(mainCode.includes('persist:stage-web-music'), 'main.cjs must configure persistent web music partition')
+    assert.ok(mainCode.includes('stage:open-web-music'), 'main.cjs must register web music window IPC handler')
+    assert.ok(mainCode.includes('stage:set-music-volume'), 'main.cjs must register volume IPC handler')
 
     // Verify koffi native runtime resolves cleanly
     const koffi = require('koffi')
@@ -84,9 +95,15 @@ async function runTests() {
     const snap = await stageExcel.loadWorkbookData(tempExcel, undefined, now)
     assert.equal(snap.activeSheet, todaySheet)
     assert.equal(snap.rows.length, 10)
-    assert.equal(snap.headers.length, 6)
+    assert.equal(snap.headers.length, 9)
+    assert.equal(snap.headers[3], '服务分类')
+    assert.equal(snap.headers[4], '服务子分类')
+    assert.equal(snap.headers[6], 'SLA 到期时间')
+    assert.ok(snap.categoryOptions && Object.keys(snap.categoryOptions).length === 4, 'Must load 4 parent service categories')
+    assert.equal(snap.categoryOptions['基础架构'].length, 3, 'Each parent category must have 3 subcategories')
+    assert.equal(snap.sheets.includes('服务分类字典'), false, 'Dictionary sheet must be hidden from sheet switcher')
 
-    // Write via Desktop ExcelStore
+    // Write via Desktop ExcelStore (Col 6 = 解决方案：)
     const deskSave = await stageExcel.saveCellsToWorkbook({
       excelPath: tempExcel,
       sheetName: todaySheet,
@@ -109,6 +126,47 @@ async function runTests() {
       const siblingStatus = await siblingExcel.checkWorkbookStatus(tempExcel, snap.version)
       assert.equal(siblingStatus.stale, true)
     }
+
+    // 3. Test working-hours SLA calculation (Mon-Fri 08:30 - 18:00, skipping off-hours & weekends)
+    // Same-day within working hours: Mon 09:00 -> Mon 12:00 = 3.0h (Red)
+    const mon9am = new Date(2026, 10, 30, 9, 0, 0)
+    const mon12pm = new Date(2026, 10, 30, 12, 0, 0)
+    const slaSameDayRed = stageExcel.evaluateSla('2026-11-30 12:00', mon9am)
+    assert.equal(slaSameDayRed?.tone, 'err')
+    assert.ok(Math.abs((slaSameDayRed?.remainingHours ?? 0) - 3) < 0.01)
+
+    // Same-day yellow: Mon 09:00 -> Mon 15:00 = 6.0h (Yellow 4-8h)
+    const slaSameDayWarn = stageExcel.evaluateSla('2026-11-30 15:00', mon9am)
+    assert.equal(slaSameDayWarn?.tone, 'warn')
+    assert.ok(Math.abs((slaSameDayWarn?.remainingHours ?? 0) - 6) < 0.01)
+
+    // Same-day green: Mon 08:30 -> Mon 17:30 = 9.0h (Green >8h)
+    const mon830 = new Date(2026, 10, 30, 8, 30, 0)
+    const slaSameDayGreen = stageExcel.evaluateSla('2026-11-30 17:30', mon830)
+    assert.equal(slaSameDayGreen?.tone, 'ok')
+    assert.ok(Math.abs((slaSameDayGreen?.remainingHours ?? 0) - 9) < 0.01)
+
+    // Overnight off-hours skipped: Mon 17:00 -> Tue 10:30 = 1h + 2h = 3h (Red)
+    const mon1700 = new Date(2026, 10, 30, 17, 0, 0)
+    const slaOvernight = stageExcel.evaluateSla('2026-12-01 10:30', mon1700)
+    assert.equal(slaOvernight?.tone, 'err')
+    assert.ok(Math.abs((slaOvernight?.remainingHours ?? 0) - 3) < 0.01)
+
+    // Weekend skipped: Sat 21:00 -> Mon 11:30 = 3.0h (Red); Fri 16:00 -> Mon 12:30 = 2h + 4h = 6h (Yellow)
+    const sat2100 = new Date(2026, 10, 28, 21, 0, 0)
+    const slaWeekendRed = stageExcel.evaluateSla('2026-11-30 11:30', sat2100)
+    assert.equal(slaWeekendRed?.tone, 'err')
+    assert.ok(Math.abs((slaWeekendRed?.remainingHours ?? 0) - 3) < 0.01)
+
+    const fri1600 = new Date(2026, 10, 27, 16, 0, 0)
+    const slaWeekendWarn = stageExcel.evaluateSla('2026-11-30 12:30', fri1600)
+    assert.equal(slaWeekendWarn?.tone, 'warn')
+    assert.ok(Math.abs((slaWeekendWarn?.remainingHours ?? 0) - 6) < 0.01)
+
+    // Expired deadline -> Red
+    const slaExpired = stageExcel.evaluateSla('2026-11-30 10:00', mon12pm)
+    assert.equal(slaExpired?.tone, 'err')
+    assert.equal(slaExpired?.label, '已超时')
 
     // Verify dynamic Row-1 headers & arbitrary column count
     const customExcel = join(tempDir, 'custom5.xlsx')

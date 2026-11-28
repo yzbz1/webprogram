@@ -38,6 +38,9 @@ async function runTests() {
     const contentCode = readFileSync(resolve(root, 'extension/content.js'), 'utf8')
     assert.ok(contentCode.includes('attachShadow'), 'content.js must isolate UI in Shadow DOM')
     assert.ok(contentCode.includes('pointer-events: none !important'), 'content.js must preserve click-through')
+    assert.ok(contentCode.includes('idw-field-pair'), 'content.js must include single-row category pair')
+    assert.ok(contentCode.includes('idw-mini-sla'), 'content.js must include hover SLA hours pill')
+    assert.ok(contentCode.includes('idw-sla-pill'), 'content.js must include SLA remaining pill')
 
     // Verify portable CRLF ASCII batch scripts
     for (const bat of ['start-bridge.bat', 'stop-bridge.bat']) {
@@ -108,7 +111,16 @@ async function runTests() {
     const load1 = await callApi('load')
     assert.equal(load1.ok, true)
     assert.equal(load1.value.rows.length, 10)
+    assert.equal(load1.value.headers.length, 9)
+    assert.ok(load1.value.categoryOptions && Object.keys(load1.value.categoryOptions).length === 4)
+    assert.equal(load1.value.sheets.includes('服务分类字典'), false)
     assert.equal(load1.value.activeSheet, todaySheet)
+
+    // Verify working-hours SLA calculation (Mon-Fri 08:30-18:00)
+    const sat2100 = new Date(2026, 10, 28, 21, 0, 0)
+    const slaWeekend = bridgeExcel.evaluateSla('2026-11-30 11:30', sat2100)
+    assert.equal(slaWeekend?.tone, 'err')
+    assert.equal(slaWeekend?.shortLabel, '3.0h')
 
     // Chrome edits cell -> verify via DSH's own excel-store.cjs if present
     const save1 = await callApi('save-cell', {

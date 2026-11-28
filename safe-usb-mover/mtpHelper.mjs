@@ -7,6 +7,81 @@ import { execFile, spawn } from 'node:child_process';
 
 let activeMtpChild = null;
 let activeMtpAborted = false;
+let cachedMtpDevices = [];
+let mtpListInFlight = null;
+
+/**
+ * Whether an MTP file transfer PowerShell session currently holds the USB/MTP bus.
+ */
+export function isMtpBusy() {
+  return Boolean(activeMtpChild);
+}
+
+/**
+ * Update cached free/total space for a known MTP device after a live check.
+ */
+export function updateCachedMtpSpace(deviceName, storageName, freeBytes, totalBytes) {
+  if (!deviceName || !Array.isArray(cachedMtpDevices) || cachedMtpDevices.length === 0) return;
+  for (const d of cachedMtpDevices) {
+    if (d.deviceName === deviceName && (!storageName || d.storageName === storageName)) {
+      if (Number.isFinite(freeBytes) && freeBytes >= 0) d.freeBytes = Number(freeBytes);
+      if (Number.isFinite(totalBytes) && totalBytes > 0) d.totalBytes = Number(totalBytes);
+      d.online = true;
+    }
+  }
+}
+
+/**
+ * Strip PowerShell #< CLIXML progress/error XML noise into a concise human-readable error message.
+ */
+export function cleanPowerShellError(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return 'PowerShell 未知错误';
+
+  const decodeXml = (s) =>
+    s
+      .replace(/_x000D__x000A_|_x000A_|_x000D_/g, '\n')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'");
+
+  const isNoiseLine = (line) =>
+    !line ||
+    /^#< CLIXML/i.test(line) ||
+    /^所在位置\s+行:|^At line:\d+/i.test(line) ||
+    /^\+\s*(throw |~+)/i.test(line) ||
+    /^\+\s*CategoryInfo\b/i.test(line) ||
+    /^\+\s*FullyQualifiedErrorId\b/i.test(line);
+
+  if (text.includes('#< CLIXML') || text.includes('<Objs ')) {
+    const errorNodes = [];
+    const re = /<S S="Error">([\s\S]*?)<\/S>/g;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const decoded = decodeXml(m[1]);
+      for (const line of decoded.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!isNoiseLine(trimmed)) errorNodes.push(trimmed);
+      }
+    }
+    if (errorNodes.length > 0) {
+      return errorNodes[0];
+    }
+    const stripped = decodeXml(text.replace(/<[^>]+>/g, ' '))
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => !isNoiseLine(l));
+    if (stripped) return stripped;
+  }
+
+  const firstUseful = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => !isNoiseLine(l));
+  return firstUseful || text.slice(0, 240);
+}
 
 /**
  * Force-terminate an active/hung MTP PowerShell transfer subprocess immediately.
@@ -33,7 +108,7 @@ export function abortActiveMtpTransfer() {
  */
 export function runPowerShellUtf8(script, { sta = false, timeout = 15000 } = {}) {
   return new Promise((resolve, reject) => {
-    const wrapped = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n$OutputEncoding = [System.Text.Encoding]::UTF8\r\n${script}`;
+    const wrapped = `$ProgressPreference = 'SilentlyContinue'\r\n[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n$OutputEncoding = [System.Text.Encoding]::UTF8\r\n${script}`;
     const encoded = Buffer.from(wrapped, 'utf16le').toString('base64');
     const args = ['-NoProfile', '-NonInteractive'];
     if (sta) args.push('-STA');
@@ -44,7 +119,7 @@ export function runPowerShellUtf8(script, { sta = false, timeout = 15000 } = {})
       { timeout, windowsHide: true, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
-          const msg = (stderr || err.message || 'PowerShell error').trim();
+          const msg = cleanPowerShellError(stderr || err.message || 'PowerShell error');
           reject(new Error(msg));
         } else {
           resolve(String(stdout || ''));
@@ -106,8 +181,17 @@ export function parseMtpPath(rawPath) {
 
 /**
  * Enumerate all connected MTP / Portable Devices under Windows "此电脑" (NameSpace(17)).
+ * Returns cached snapshot with busy=true while an MTP transfer is actively using the USB bus
+ * so UI polling never contends with CopyHere or drops the phone card on a COM timeout.
  */
-export async function listMtpDevices() {
+export async function listMtpDevices({ force = false } = {}) {
+  if (isMtpBusy() && !force) {
+    return cachedMtpDevices.map((d) => ({ ...d, busy: true }));
+  }
+  if (mtpListInFlight) {
+    return mtpListInFlight;
+  }
+
   const script = `
 $sh = New-Object -ComObject Shell.Application
 $pc = $sh.NameSpace(17)
@@ -145,36 +229,72 @@ foreach ($dev in $pc.Items()) {
 }
 if ($out.Count -eq 0) { '[]' } else { ConvertTo-Json -InputObject @($out) -Compress }
 `;
-  try {
-    const stdout = await runPowerShellUtf8(script, { sta: true, timeout: 9000 });
-    const trimmed = stdout.trim();
-    if (!trimmed) return [];
-    const arr = JSON.parse(trimmed);
-    return (Array.isArray(arr) ? arr : [arr]).map((d) => ({
-      id: `mtp:${d.deviceName}:${d.storageName}`,
-      isMtp: true,
-      letter: 'MTP',
-      deviceName: d.deviceName,
-      storageName: d.storageName,
-      label: `${d.deviceName} · ${d.storageName}`,
-      displayPath: `此电脑\\${d.deviceName}\\${d.storageName}`,
-      defaultTargetPath: d.defaultTargetPath || `此电脑\\${d.deviceName}\\${d.storageName}`,
-      driveType: 10,
-      typeName: 'MTP 便携设备',
-      fileSystem: 'MTP',
-      totalBytes: Number(d.totalBytes || 0),
-      freeBytes: Number(d.freeBytes || 0),
-      online: true,
-    }));
-  } catch {
-    return [];
-  }
+  mtpListInFlight = (async () => {
+    try {
+      const stdout = await runPowerShellUtf8(script, { sta: true, timeout: 9000 });
+      const trimmed = stdout.trim();
+      if (!trimmed) {
+        cachedMtpDevices = [];
+        return [];
+      }
+      const arr = JSON.parse(trimmed);
+      const mapped = (Array.isArray(arr) ? arr : [arr]).map((d) => ({
+        id: `mtp:${d.deviceName}:${d.storageName}`,
+        isMtp: true,
+        letter: 'MTP',
+        deviceName: d.deviceName,
+        storageName: d.storageName,
+        label: `${d.deviceName} · ${d.storageName}`,
+        displayPath: `此电脑\\${d.deviceName}\\${d.storageName}`,
+        defaultTargetPath: d.defaultTargetPath || `此电脑\\${d.deviceName}\\${d.storageName}`,
+        driveType: 10,
+        typeName: 'MTP 便携设备',
+        fileSystem: 'MTP',
+        totalBytes: Number(d.totalBytes || 0),
+        freeBytes: Number(d.freeBytes || 0),
+        online: true,
+        busy: false,
+      }));
+      cachedMtpDevices = mapped;
+      return mapped;
+    } catch {
+      return cachedMtpDevices.map((d) => ({ ...d, busy: isMtpBusy() }));
+    } finally {
+      mtpListInFlight = null;
+    }
+  })();
+
+  return mtpListInFlight;
 }
 
 /**
  * Query live free/total space for a specific MTP target path.
  */
 export async function getMtpStorageInfo(mtpTarget) {
+  if (isMtpBusy()) {
+    const cached = cachedMtpDevices.find(
+      (d) =>
+        d.deviceName === mtpTarget.deviceName &&
+        (!mtpTarget.storageName || d.storageName === mtpTarget.storageName)
+    );
+    if (cached) {
+      return {
+        online: true,
+        isMtp: true,
+        busy: true,
+        letter: 'MTP',
+        deviceName: cached.deviceName,
+        storageName: cached.storageName,
+        label: cached.label,
+        driveType: 10,
+        typeName: 'MTP 便携设备',
+        fileSystem: 'MTP',
+        totalBytes: cached.totalBytes,
+        freeBytes: cached.freeBytes,
+      };
+    }
+  }
+
   const devB64 = toJsonBase64(mtpTarget.deviceName);
   const stB64 = toJsonBase64(mtpTarget.storageName || '');
   const script = `
@@ -214,6 +334,9 @@ $cap = $st.ExtendedProperty('System.Capacity')
         freeBytes: 0,
       };
     }
+    const freeBytes = Number(parsed.freeBytes || 0);
+    const totalBytes = Number(parsed.totalBytes || 0);
+    updateCachedMtpSpace(parsed.deviceName, parsed.storageName, freeBytes, totalBytes);
     return {
       online: true,
       isMtp: true,
@@ -224,8 +347,8 @@ $cap = $st.ExtendedProperty('System.Capacity')
       driveType: 10,
       typeName: 'MTP 便携设备',
       fileSystem: 'MTP',
-      totalBytes: Number(parsed.totalBytes || 0),
-      freeBytes: Number(parsed.freeBytes || 0),
+      totalBytes,
+      freeBytes,
     };
   } catch {
     return {
@@ -461,6 +584,7 @@ export async function transferFileToMtp({
   srcSha256 = '',
   onPhaseChange,
   onProgress,
+  onHeartbeat,
 }) {
   const allSubs = [...(mtpTarget.subSegments || []), ...relSubDirs.filter(Boolean)];
   const tempVerifyDir = verifyReadback
@@ -468,8 +592,8 @@ export async function transferFileToMtp({
     : '';
   if (tempVerifyDir) await fsp.mkdir(tempVerifyDir, { recursive: true });
 
-  // Sensible cap (~12 min max for 1.16 GB, minimum 3 min) + 90s stall watchdog inside loop
-  const timeoutSec = Math.max(180, Math.ceil(fileSize / (2 * 1024 * 1024)) + 120);
+  // Dynamic completion cap (~1.2 MB/s worst-case throughput + 120s buffer, minimum 3 min)
+  const transferTimeoutSec = Math.max(180, Math.ceil(fileSize / (1.2 * 1024 * 1024)) + 120);
   const reqB64 = toJsonBase64({
     deviceName: mtpTarget.deviceName,
     storageName: mtpTarget.storageName,
@@ -485,6 +609,7 @@ export async function transferFileToMtp({
   activeMtpAborted = false;
 
   const script = `
+$ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 $req = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${reqB64}')) | ConvertFrom-Json
@@ -512,9 +637,10 @@ foreach ($seg in @($req.subSegments)) {
   $curFolder = $child.GetFolder
 }
 
-function Find-MtpItem($folder, $name) {
+function Find-MtpItem($folder, $name, [bool]$allowFullScan) {
   $p = $folder.ParseName($name)
   if ($null -ne $p) { return $p }
+  if (-not $allowFullScan) { return $null }
   return ($folder.Items() | Where-Object { -not $_.IsFolder -and $_.Name -eq $name } | Select-Object -First 1)
 }
 
@@ -526,7 +652,7 @@ function Get-MtpSize($item) {
 }
 
 $needCopy = $true
-$existing = Find-MtpItem $curFolder $req.fileName
+$existing = Find-MtpItem $curFolder $req.fileName $true
 if ($null -ne $existing) {
   $exSize = Get-MtpSize $existing
   if ($exSize -eq [double]$req.fileSize) {
@@ -543,17 +669,19 @@ if ($null -ne $existing) {
 if ($needCopy) {
   # 4 = no progress dialog, 16 = yes to all (overwrite truncated), 1024 = no error UI
   $curFolder.CopyHere($req.srcFullPath, 1044)
+  Start-Sleep -Milliseconds 1500
 }
 
 Write-Output 'PHASE:POLLING'
 
 # Watchdog verification loop:
-# - checks device presence every ~2.4s
-# - emits PROGRESS:<bytes>
-# - aborts if stalled with zero progress for 90s
-# - requires exact byte match on 2 consecutive 800ms polls
-$deadline = (Get-Date).AddSeconds(${timeoutSec})
-$lastProgressAt = Get-Date
+# - polls every 2000ms to minimize COM contention during CopyHere
+# - full folder scan & device alive check only every ~10s
+# - emits HEARTBEAT:<elapsedSec> so UI shows active write progress even before MTP commits final size
+# - requires exact byte match on 2 consecutive checks
+$transferStartedAt = Get-Date
+$deadline = $transferStartedAt.AddSeconds(${transferTimeoutSec})
+$lastProgressAt = $transferStartedAt
 $lastReportedSize = -1
 $consecutiveOk = 0
 $finalItem = $null
@@ -562,19 +690,24 @@ $pollIdx = 0
 
 while ((Get-Date) -lt $deadline) {
   $pollIdx++
-  if (($pollIdx % 3) -eq 0) {
+  $now = Get-Date
+  $elapsedSec = [int]($now - $transferStartedAt).TotalSeconds
+  Write-Output ("HEARTBEAT:" + $elapsedSec)
+
+  $allowFullScan = ($pollIdx -eq 1) -or (($pollIdx % 5) -eq 0)
+  if (($pollIdx % 5) -eq 0) {
     $devAlive = $pc.Items() | Where-Object { $_.Name -eq $req.deviceName -and $_.IsFolder } | Select-Object -First 1
     if ($null -eq $devAlive) {
       throw 'MTP_DISCONNECTED: 传输期间检测到设备断开'
     }
   }
 
-  $found = Find-MtpItem $curFolder $req.fileName
+  $found = Find-MtpItem $curFolder $req.fileName $allowFullScan
   if ($null -ne $found) {
     $sz = Get-MtpSize $found
     if ($sz -gt $lastReportedSize) {
       $lastReportedSize = $sz
-      $lastProgressAt = Get-Date
+      $lastProgressAt = $now
       Write-Output ("PROGRESS:" + [int64]$sz)
     }
     if ($sz -eq [double]$req.fileSize) {
@@ -589,15 +722,15 @@ while ((Get-Date) -lt $deadline) {
     }
   }
 
-  if (((Get-Date) - $lastProgressAt).TotalSeconds -ge 90) {
+  if ($lastReportedSize -gt 0 -and (($now - $lastProgressAt).TotalSeconds -ge 120)) {
     throw 'MTP_VERIFY_TIMEOUT: 手机 MTP 长时间无写入进展（已自动保护 PC 源文件）'
   }
 
-  Start-Sleep -Milliseconds 800
+  Start-Sleep -Milliseconds 2000
 }
 
 if ($null -eq $finalItem) {
-  throw 'MTP_VERIFY_TIMEOUT: 写入后未能确认目标字节大小一致（可能已掉线）'
+  throw 'MTP_VERIFY_TIMEOUT: 手机 MTP 传输超时（超过 ${transferTimeoutSec} 秒仍未完成，已自动保护 PC 源文件）'
 }
 
 $readbackPath = ''
@@ -605,7 +738,7 @@ if ($req.verifyReadback) {
   $tmpFolder = $sh.NameSpace($req.tempVerifyDir)
   $tmpFolder.CopyHere($finalItem, 1044)
   $rbTarget = Join-Path $req.tempVerifyDir $req.fileName
-  $rbDeadline = (Get-Date).AddSeconds(${timeoutSec})
+  $rbDeadline = (Get-Date).AddSeconds(${transferTimeoutSec})
   while ((Get-Date) -lt $rbDeadline) {
     if (Test-Path -LiteralPath $rbTarget) {
       $fi = Get-Item -LiteralPath $rbTarget
@@ -661,7 +794,7 @@ Write-Output ('RESULT:' + ([PSCustomObject]@{
           child.kill('SIGKILL');
         } catch {}
         finish(new Error('MTP_VERIFY_TIMEOUT: 传输超时，已自动中断并保护 PC 源文件'));
-      }, (timeoutSec + 25) * 1000);
+      }, (transferTimeoutSec + 45) * 1000);
 
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk) => {
@@ -674,6 +807,9 @@ Write-Output ('RESULT:' + ([PSCustomObject]@{
           if (line.startsWith('PROGRESS:')) {
             const bytes = Number(line.slice(9));
             if (Number.isFinite(bytes)) onProgress?.(bytes);
+          } else if (line.startsWith('HEARTBEAT:')) {
+            const sec = Number(line.slice(10));
+            if (Number.isFinite(sec)) onHeartbeat?.(sec);
           } else if (line.startsWith('RESULT:')) {
             try {
               parsedResult = JSON.parse(line.slice(7));
@@ -699,7 +835,7 @@ Write-Output ('RESULT:' + ([PSCustomObject]@{
           return;
         }
         if (code !== 0 || !parsedResult?.ok) {
-          finish(new Error((errText || `MTP_TRANSFER_FAILED (code ${code})`).trim()));
+          finish(new Error(cleanPowerShellError(errText || `MTP_TRANSFER_FAILED (code ${code})`)));
           return;
         }
         finish(null, parsedResult);

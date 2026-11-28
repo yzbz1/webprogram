@@ -227,7 +227,38 @@ async function queryLogicalDisks() {
  * Query both Windows MTP portable devices (phones) and logical disks.
  */
 async function queryWindowsDrives() {
-  const [mtpList, diskList] = await Promise.all([listMtpDevices(), queryLogicalDisks()]);
+  const [mtpListRaw, diskList] = await Promise.all([listMtpDevices(), queryLogicalDisks()]);
+  const mtpList = mtpListRaw.map((d) => ({ ...d }));
+  const activeTd = state.targetDrive;
+  if (activeTd?.isMtp && activeTd.online) {
+    const match = mtpList.find(
+      (m) => m.deviceName === activeTd.deviceName && (!activeTd.storageName || m.storageName === activeTd.storageName)
+    );
+    if (match) {
+      if (Number.isFinite(activeTd.freeBytes)) match.freeBytes = activeTd.freeBytes;
+      if (Number.isFinite(activeTd.totalBytes) && activeTd.totalBytes > 0) match.totalBytes = activeTd.totalBytes;
+      if (state.running) match.busy = true;
+    } else if (state.running) {
+      const stName = activeTd.storageName || '内部共享存储空间';
+      mtpList.unshift({
+        id: `mtp:${activeTd.deviceName}:${stName}`,
+        isMtp: true,
+        busy: true,
+        letter: 'MTP',
+        deviceName: activeTd.deviceName,
+        storageName: stName,
+        label: activeTd.label || `${activeTd.deviceName} · ${stName}`,
+        displayPath: `此电脑\\${activeTd.deviceName}\\${stName}`,
+        defaultTargetPath: config.targetDir || `此电脑\\${activeTd.deviceName}\\${stName}`,
+        driveType: 10,
+        typeName: 'MTP 便携设备',
+        fileSystem: 'MTP',
+        totalBytes: Number(activeTd.totalBytes || 0),
+        freeBytes: Number(activeTd.freeBytes || 0),
+        online: true,
+      });
+    }
+  }
   return [...mtpList, ...diskList];
 }
 
@@ -551,6 +582,8 @@ async function safeTransferOneFile(fileItem) {
       verifiedBytes: 0,
       speedMBs: 0,
       percent: 0,
+      elapsedSec: 0,
+      transport: 'mtp',
       phase: 'copying',
     };
     broadcastState(true);
@@ -570,6 +603,11 @@ async function safeTransferOneFile(fileItem) {
       relSubDirs,
       verifyReadback: Boolean(config.mtpReadbackVerify),
       srcSha256: srcHash,
+      onHeartbeat: (elapsedSec) => {
+        if (!state.currentFile) return;
+        state.currentFile.elapsedSec = elapsedSec;
+        broadcastState();
+      },
       onProgress: (bytes) => {
         if (!state.currentFile) return;
         state.currentFile.copiedBytes = bytes;

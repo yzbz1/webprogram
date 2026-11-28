@@ -7286,6 +7286,102 @@
   // src/renderer/StageWorkspace.tsx
   var import_react3 = __toESM(require_react());
 
+  // src/shared/sla.ts
+  var DEFAULT_SERVICE_CATEGORIES = {
+    \u57FA\u7840\u67B6\u6784: ["\u7F51\u7EDC\u4E0E\u7F51\u5173", "\u670D\u52A1\u5668\u4E0E\u78C1\u76D8", "\u5BB9\u5668\u4E0E\u8BC1\u4E66"],
+    \u5E94\u7528\u7CFB\u7EDF: ["\u5355\u70B9\u767B\u5F55\u4E0E\u8BA4\u8BC1", "OA\u4E0E\u5BA1\u6279\u6D41", "\u8D22\u52A1\u4E0E\u62A5\u8868"],
+    \u4E2D\u95F4\u4EF6\u4E0E\u6570\u636E: ["\u6D88\u606F\u961F\u5217", "\u6570\u636E\u5E93\u4E0ESQL", "\u7F13\u5B58\u4E0E\u68C0\u7D22"],
+    \u53D1\u5E03\u4E0E\u8FD0\u7EF4: ["CI/CD\u6D41\u6C34\u7EBF", "CDN\u4E0E\u9759\u6001\u8D44\u6E90", "\u5B9A\u65F6\u4EFB\u52A1\u8C03\u5EA6"]
+  };
+  var WORK_START_MIN = 8 * 60 + 30;
+  var WORK_END_MIN = 18 * 60;
+  var MS_PER_MIN = 6e4;
+  var MS_PER_HOUR = 36e5;
+  function isServiceCategoryHeader(header) {
+    const h = header.trim();
+    return h.includes("\u670D\u52A1\u5206\u7C7B") && !h.includes("\u5B50\u5206\u7C7B");
+  }
+  function isServiceSubCategoryHeader(header) {
+    const h = header.trim();
+    return h.includes("\u670D\u52A1\u5B50\u5206\u7C7B") || h.includes("\u5B50\u5206\u7C7B");
+  }
+  function isSlaHeader(header) {
+    return /sla|到期时间/i.test(header.trim());
+  }
+  function parseLocalDateTime(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/.exec(
+      trimmed
+    );
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = match[4] !== void 0 ? Number(match[4]) : 18;
+    const minute = match[5] !== void 0 ? Number(match[5]) : 0;
+    const second = match[6] !== void 0 ? Number(match[6]) : 0;
+    if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+      return null;
+    }
+    const d = new Date(year, month - 1, day, hour, minute, second, 0);
+    if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
+      return null;
+    }
+    return d;
+  }
+  function sumWorkingMsBetween(startMs, endMs) {
+    if (endMs <= startMs) return 0;
+    const cursor = new Date(startMs);
+    cursor.setHours(0, 0, 0, 0);
+    let totalMs = 0;
+    for (let days = 0; days < 366; days += 1) {
+      const dayStartMs = cursor.getTime();
+      if (dayStartMs >= endMs) break;
+      const dow = cursor.getDay();
+      if (dow >= 1 && dow <= 5) {
+        const workStart = dayStartMs + WORK_START_MIN * MS_PER_MIN;
+        const workEnd = dayStartMs + WORK_END_MIN * MS_PER_MIN;
+        const overlapStart = Math.max(startMs, workStart);
+        const overlapEnd = Math.min(endMs, workEnd);
+        if (overlapEnd > overlapStart) {
+          totalMs += overlapEnd - overlapStart;
+        }
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return totalMs;
+  }
+  function computeWorkingHoursRemaining(deadline, now = /* @__PURE__ */ new Date()) {
+    const startMs = now.getTime();
+    const endMs = deadline.getTime();
+    if (endMs === startMs) return 0;
+    if (endMs > startMs) {
+      return sumWorkingMsBetween(startMs, endMs) / MS_PER_HOUR;
+    }
+    return -(sumWorkingMsBetween(endMs, startMs) / MS_PER_HOUR);
+  }
+  function evaluateSla(rawValue, now = /* @__PURE__ */ new Date()) {
+    const deadline = parseLocalDateTime(rawValue);
+    if (!deadline) return null;
+    const remainingHours = computeWorkingHoursRemaining(deadline, now);
+    const tone = remainingHours < 4 ? "err" : remainingHours <= 8 ? "warn" : "ok";
+    let label;
+    let shortLabel;
+    if (deadline.getTime() <= now.getTime()) {
+      label = "\u5DF2\u8D85\u65F6";
+      shortLabel = "\u8D85\u65F6";
+    } else if (remainingHours < 0.1) {
+      label = "\u5373\u5C06\u5230\u671F";
+      shortLabel = "0.1h";
+    } else {
+      const rounded = remainingHours.toFixed(1);
+      label = `\u5DE5\u4F5C\u5269\u4F59 ${rounded}h`;
+      shortLabel = `${rounded}h`;
+    }
+    return { deadline, remainingHours, tone, label, shortLabel };
+  }
+
   // src/renderer/BongoCatWidget.tsx
   var import_react = __toESM(require_react());
 
@@ -7977,7 +8073,13 @@
     tracks: []
   };
   var DROPLET_LEAVE_GRACE_MS = 160;
-  function HorizonPearlSvg() {
+  var VOLUME_HUD_TIMEOUT_MS = 1200;
+  var WAVE_FRONT_STROKE_PATH = "M 0 0 C 18 -12, 32 -12, 50 0 C 68 12, 82 12, 100 0 C 118 -12, 132 -12, 150 0 C 168 12, 182 12, 200 0";
+  var WAVE_FRONT_FILL_PATH = `${WAVE_FRONT_STROKE_PATH} L 200 120 L 0 120 Z`;
+  var WAVE_BACK_FILL_PATH = "M 0 3 C 18 10, 32 10, 50 3 C 68 -7, 82 -7, 100 3 C 118 10, 132 10, 150 3 C 168 -7, 182 -7, 200 3 L 200 120 L 0 120 Z";
+  function HorizonPearlSvg({ volume, playing }) {
+    const clampedVol = Math.max(0, Math.min(100, volume));
+    const waterY = 92 - clampedVol / 100 * 82;
     return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("svg", { className: "stg-horizon-orb", viewBox: "0 0 100 100", "aria-hidden": "true", children: [
       /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("defs", { children: [
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("clipPath", { id: "stg-pearl-clip", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("circle", { cx: "50", cy: "50", r: "49" }) }),
@@ -7986,7 +8088,7 @@
           /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("stop", { offset: "48%", stopColor: "#1b1f27" }),
           /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("stop", { offset: "100%", stopColor: "#090b0f" })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("linearGradient", { id: "stg-pearl-silver", x1: "25%", y1: "35%", x2: "72%", y2: "96%", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("linearGradient", { id: "stg-pearl-silver", x1: "25%", y1: "0%", x2: "72%", y2: "85%", children: [
           /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("stop", { offset: "0%", stopColor: "#6a7585" }),
           /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("stop", { offset: "28%", stopColor: "#a7b2c0" }),
           /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("stop", { offset: "56%", stopColor: "#e5ebf3" }),
@@ -8003,44 +8105,51 @@
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("g", { clipPath: "url(#stg-pearl-clip)", children: [
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("rect", { x: "0", y: "0", width: "100", height: "100", fill: "url(#stg-pearl-dark)" }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-          "path",
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+          "g",
           {
-            d: "M -6 44 C 18 33, 38 40, 56 50 C 74 59, 88 53, 106 47 L 106 106 L -6 106 Z",
-            fill: "url(#stg-pearl-silver)"
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-          "path",
-          {
-            d: "M -6 41 C 18 30, 38 37, 56 47 C 74 56, 88 50, 106 44",
-            fill: "none",
-            stroke: "#f59e0b",
-            strokeWidth: "6.5",
-            opacity: "0.82",
-            filter: "url(#stg-horizon-blur)"
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-          "path",
-          {
-            d: "M -6 47 C 18 36, 38 43, 56 53 C 74 62, 88 56, 106 50",
-            fill: "none",
-            stroke: "#38bdf8",
-            strokeWidth: "6.5",
-            opacity: "0.78",
-            filter: "url(#stg-horizon-blur)"
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-          "path",
-          {
-            d: "M -6 44 C 18 33, 38 40, 56 50 C 74 59, 88 53, 106 47",
-            fill: "none",
-            stroke: "#ffffff",
-            strokeWidth: "3.6",
-            opacity: "0.96",
-            filter: "url(#stg-horizon-glow)"
+            className: "stg-water-level",
+            "data-playing": playing ? "true" : void 0,
+            style: { transform: `translateY(${waterY.toFixed(1)}px)` },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("g", { className: "stg-water-wave-back", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: WAVE_BACK_FILL_PATH, fill: "rgba(56, 189, 248, 0.24)" }) }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("g", { className: "stg-water-wave-front", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: WAVE_FRONT_FILL_PATH, fill: "url(#stg-pearl-silver)" }),
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("g", { transform: "translate(0, -3)", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                  "path",
+                  {
+                    d: WAVE_FRONT_STROKE_PATH,
+                    fill: "none",
+                    stroke: "#f59e0b",
+                    strokeWidth: "6.5",
+                    opacity: "0.82",
+                    filter: "url(#stg-horizon-blur)"
+                  }
+                ) }),
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("g", { transform: "translate(0, 3)", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                  "path",
+                  {
+                    d: WAVE_FRONT_STROKE_PATH,
+                    fill: "none",
+                    stroke: "#38bdf8",
+                    strokeWidth: "6.5",
+                    opacity: "0.78",
+                    filter: "url(#stg-horizon-blur)"
+                  }
+                ) }),
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                  "path",
+                  {
+                    d: WAVE_FRONT_STROKE_PATH,
+                    fill: "none",
+                    stroke: "#ffffff",
+                    strokeWidth: "3.6",
+                    opacity: "0.96",
+                    filter: "url(#stg-horizon-glow)"
+                  }
+                )
+              ] })
+            ]
           }
         ),
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("ellipse", { cx: "48", cy: "86", rx: "30", ry: "9", fill: "rgba(255,255,255,0.28)", filter: "url(#stg-horizon-blur)" }),
@@ -8048,14 +8157,30 @@
       ] })
     ] });
   }
-  function SiriMusicOrb() {
-    const [media, setMedia] = (0, import_react2.useState)(EMPTY_MEDIA);
+  function SiriMusicOrb({ musicSource, musicWebUrl, musicVolume }) {
+    const [smtcMedia, setSmtcMedia] = (0, import_react2.useState)(EMPTY_MEDIA);
+    const [webMedia, setWebMedia] = (0, import_react2.useState)(EMPTY_MEDIA);
     const [localLib, setLocalLib] = (0, import_react2.useState)(EMPTY_LIBRARY);
     const [trackIndex, setTrackIndex] = (0, import_react2.useState)(0);
     const [localPlaying, setLocalPlaying] = (0, import_react2.useState)(false);
     const [hovered, setHovered] = (0, import_react2.useState)(false);
+    const [volume, setVolume] = (0, import_react2.useState)(() => Math.max(0, Math.min(100, Math.round(musicVolume))));
+    const [volHudVisible, setVolHudVisible] = (0, import_react2.useState)(false);
     const audioRef = (0, import_react2.useRef)(null);
+    const clusterRef = (0, import_react2.useRef)(null);
     const hoverTimerRef = (0, import_react2.useRef)(null);
+    const volHudTimerRef = (0, import_react2.useRef)(null);
+    const volSaveTimerRef = (0, import_react2.useRef)(null);
+    const pendingVolRef = (0, import_react2.useRef)(musicVolume);
+    const lastWheelAtRef = (0, import_react2.useRef)(0);
+    const wheelHandlerRef = (0, import_react2.useRef)(() => {
+    });
+    (0, import_react2.useEffect)(() => {
+      if (Date.now() - lastWheelAtRef.current < 450) return;
+      const clean = Math.max(0, Math.min(100, Math.round(musicVolume)));
+      setVolume(clean);
+      pendingVolRef.current = clean;
+    }, [musicVolume]);
     const setHoveredWithGrace = (0, import_react2.useCallback)((enter) => {
       if (hoverTimerRef.current !== null) {
         window.clearTimeout(hoverTimerRef.current);
@@ -8072,11 +8197,15 @@
     }, []);
     (0, import_react2.useEffect)(() => () => {
       if (hoverTimerRef.current !== null) window.clearTimeout(hoverTimerRef.current);
+      if (volHudTimerRef.current !== null) window.clearTimeout(volHudTimerRef.current);
+      if (volSaveTimerRef.current !== null) window.clearTimeout(volSaveTimerRef.current);
     }, []);
     (0, import_react2.useEffect)(() => {
-      void window.stageApi.getMediaState().then(setMedia).catch(() => void 0);
+      void window.stageApi.getMediaState().then(setSmtcMedia).catch(() => void 0);
+      void window.stageApi.getWebMusicState().then(setWebMedia).catch(() => void 0);
       void window.stageApi.getLocalMusic().then(setLocalLib).catch(() => void 0);
-      const offMedia = window.stageApi.onMediaState(setMedia);
+      const offMedia = window.stageApi.onMediaState(setSmtcMedia);
+      const offWeb = window.stageApi.onWebMusicState(setWebMedia);
       const offLocal = window.stageApi.onLocalMusicChanged((lib) => {
         setLocalLib(lib);
         setTrackIndex(0);
@@ -8086,16 +8215,20 @@
       });
       return () => {
         offMedia();
+        offWeb();
         offLocal();
       };
     }, []);
-    const isLocalMode = localLib.folderPath.trim() !== "";
+    const isLocalMode = musicSource === "local";
+    const isWebMode = musicSource === "web";
     const tracks = localLib.tracks;
     const safeTrackIdx = tracks.length > 0 ? trackIndex % tracks.length : 0;
     const currentTrack = tracks[safeTrackIdx] ?? null;
     (0, import_react2.useEffect)(() => {
       const audio = audioRef.current;
       if (!audio || !isLocalMode || !currentTrack) return;
+      audio.volume = Math.max(0, Math.min(1, volume / 100));
+      audio.muted = volume === 0;
       if (localPlaying) {
         void audio.play().catch(() => {
           setLocalPlaying(false);
@@ -8103,12 +8236,59 @@
       } else {
         audio.pause();
       }
-    }, [isLocalMode, currentTrack?.streamUrl, localPlaying]);
-    const isPlaying = isLocalMode ? localPlaying && Boolean(currentTrack) : media.status === "playing";
-    const coverUrl = isLocalMode ? currentTrack?.coverDataUrl ?? null : media.thumbnailDataUrl;
+    }, [isLocalMode, currentTrack?.streamUrl, localPlaying, volume]);
+    const isPlaying = isWebMode ? webMedia.status === "playing" : isLocalMode ? localPlaying && Boolean(currentTrack) : smtcMedia.status === "playing";
+    const coverUrl = isWebMode ? webMedia.thumbnailDataUrl : isLocalMode ? currentTrack?.coverDataUrl ?? null : smtcMedia.thumbnailDataUrl;
     const showAlbumCover = isPlaying && Boolean(coverUrl);
-    const trackLabel = isLocalMode ? currentTrack ? `${currentTrack.title}${currentTrack.artist ? ` \xB7 ${currentTrack.artist}` : ""}` : "\u6587\u4EF6\u5939\u6682\u65E0\u97F3\u9891 \xB7 \u53F3\u952E\u66F4\u6362\u64AD\u653E\u6587\u4EF6\u5939" : media.title ? `${media.title}${media.artist ? ` \xB7 ${media.artist}` : ""}` : media.hasSession ? "\u7CFB\u7EDF\u5A92\u4F53\u4F1A\u8BDD\u5DF2\u8FDE\u63A5 \xB7 \u53F3\u952E\u9009\u672C\u5730\u6587\u4EF6\u5939" : "\u70B9\u51FB\u64AD\u653E/\u6682\u505C \xB7 \u53F3\u952E\u9009\u62E9\u64AD\u653E\u6587\u4EF6\u5939";
+    const trackLabel = isWebMode ? webMedia.title ? `${webMedia.title}${webMedia.artist ? ` \xB7 ${webMedia.artist}` : ""}` : webMedia.hasSession ? "\u7F51\u9875\u97F3\u4E50\u5DF2\u5C31\u7EEA \xB7 \u5DE6\u952E\u64AD\u653E/\u6682\u505C" : musicWebUrl ? "\u7F51\u9875\u97F3\u4E50 \xB7 \u5DE6\u952E\u6253\u5F00\u767B\u5F55/\u9009\u6B4C" : "\u7F51\u9875\u97F3\u4E50 \xB7 \u53F3\u952E/\u70B9\u51FB\u6253\u5F00\u97F3\u4E50\u7F51\u5740" : isLocalMode ? currentTrack ? `${currentTrack.title}${currentTrack.artist ? ` \xB7 ${currentTrack.artist}` : ""}` : "\u6587\u4EF6\u5939\u6682\u65E0\u97F3\u9891 \xB7 \u53F3\u952E\u66F4\u6362\u64AD\u653E\u6587\u4EF6\u5939" : smtcMedia.title ? `${smtcMedia.title}${smtcMedia.artist ? ` \xB7 ${smtcMedia.artist}` : ""}` : smtcMedia.hasSession ? "\u7CFB\u7EDF\u5A92\u4F53\u4F1A\u8BDD\u5DF2\u8FDE\u63A5 \xB7 \u53F3\u952E\u9009\u97F3\u4E50\u6E90" : "\u70B9\u51FB\u64AD\u653E/\u6682\u505C \xB7 \u6EDA\u8F6E\u8C03\u97F3\u91CF \xB7 \u53F3\u952E\u8BBE\u7F6E";
+    const handleWheelVolume = (0, import_react2.useCallback)((e) => {
+      if (Math.abs(e.deltaY) < 0.5) return;
+      e.preventDefault();
+      e.stopPropagation();
+      lastWheelAtRef.current = Date.now();
+      const up = e.deltaY < 0;
+      const step = musicSource === "smtc" ? 4 : 5;
+      const nextVol = Math.max(0, Math.min(100, pendingVolRef.current + (up ? step : -step)));
+      pendingVolRef.current = nextVol;
+      setVolume(nextVol);
+      setVolHudVisible(true);
+      if (volHudTimerRef.current !== null) window.clearTimeout(volHudTimerRef.current);
+      volHudTimerRef.current = window.setTimeout(() => {
+        volHudTimerRef.current = null;
+        setVolHudVisible(false);
+      }, VOLUME_HUD_TIMEOUT_MS);
+      if (musicSource === "local") {
+        const audio = audioRef.current;
+        if (audio) {
+          audio.volume = nextVol / 100;
+          audio.muted = nextVol === 0;
+        }
+      } else if (musicSource === "smtc") {
+        void window.stageApi.adjustSystemVolume(up ? "up" : "down", 2);
+      }
+      if (volSaveTimerRef.current !== null) window.clearTimeout(volSaveTimerRef.current);
+      volSaveTimerRef.current = window.setTimeout(() => {
+        volSaveTimerRef.current = null;
+        void window.stageApi.setMusicVolume(pendingVolRef.current);
+      }, 60);
+    }, [musicSource]);
+    wheelHandlerRef.current = handleWheelVolume;
+    (0, import_react2.useEffect)(() => {
+      const el = clusterRef.current;
+      if (!el) return;
+      const onNativeWheel = (e) => {
+        wheelHandlerRef.current(e);
+      };
+      el.addEventListener("wheel", onNativeWheel, { passive: false });
+      return () => {
+        el.removeEventListener("wheel", onNativeWheel);
+      };
+    }, []);
     const handlePrev = () => {
+      if (isWebMode) {
+        void window.stageApi.webMusicControl("prev");
+        return;
+      }
       if (isLocalMode) {
         if (tracks.length === 0) return;
         setTrackIndex((prev) => (prev - 1 + tracks.length) % tracks.length);
@@ -8118,6 +8298,10 @@
       void window.stageApi.mediaControl("prev");
     };
     const handleNext = () => {
+      if (isWebMode) {
+        void window.stageApi.webMusicControl("next");
+        return;
+      }
       if (isLocalMode) {
         if (tracks.length === 0) return;
         setTrackIndex((prev) => (prev + 1) % tracks.length);
@@ -8127,6 +8311,14 @@
       void window.stageApi.mediaControl("next");
     };
     const handleTogglePlay = async () => {
+      if (isWebMode) {
+        if (!webMedia.hasSession && webMedia.status === "idle") {
+          await window.stageApi.openWebMusicWindow(musicWebUrl || void 0);
+          return;
+        }
+        await window.stageApi.webMusicControl("toggle");
+        return;
+      }
       if (isLocalMode) {
         if (tracks.length === 0) {
           await window.stageApi.pickMusicFolder();
@@ -8152,13 +8344,15 @@
           }
         }
       ),
-      hovered && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "stg-orb-tooltip", title: trackLabel, children: [
+      (hovered || volHudVisible) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "stg-orb-tooltip", title: trackLabel, children: [
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-orb-status-dot", "data-playing": isPlaying ? "true" : void 0 }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-orb-track", children: trackLabel })
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-orb-track", children: trackLabel }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-orb-vol-badge", "data-active": volHudVisible ? "true" : void 0, children: volume === 0 ? "\u9759\u97F3" : `${volume}%` })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
         "div",
         {
+          ref: clusterRef,
           className: "stg-drop-cluster",
           "data-interactive": "true",
           "data-hovered": hovered ? "true" : void 0,
@@ -8185,8 +8379,8 @@
               {
                 type: "button",
                 className: "stg-drop-sphere",
-                title: `${trackLabel}\uFF08\u5DE6\u952E\u64AD\u653E/\u6682\u505C \xB7 \u53F3\u952E\u6253\u5F00/\u66F4\u6362\u64AD\u653E\u6587\u4EF6\u5939\uFF09`,
-                "aria-label": "\u64AD\u653E\u6216\u6682\u505C\u97F3\u4E50\uFF0C\u53F3\u952E\u6253\u5F00\u64AD\u653E\u6587\u4EF6\u5939",
+                title: `${trackLabel}\uFF08\u97F3\u91CF ${volume}% \xB7 \u6EDA\u8F6E\u8C03\u8282 \xB7 \u53F3\u952E\u5207\u6362\u97F3\u4E50\u6E90/\u7F51\u9875\u767B\u5F55\uFF09`,
+                "aria-label": "\u64AD\u653E\u6216\u6682\u505C\u97F3\u4E50\uFF0C\u6EDA\u8F6E\u8C03\u8282\u97F3\u91CF\u4E0E\u6C34\u4F4D\uFF0C\u53F3\u952E\u9009\u62E9\u97F3\u4E50\u6E90\u6216\u7F51\u9875\u767B\u5F55",
                 onClick: () => void handleTogglePlay(),
                 onContextMenu: (e) => {
                   e.preventDefault();
@@ -8197,19 +8391,20 @@
                   /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-blackhole-halo", "aria-hidden": "true" }),
                   /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-blackhole-disk", "aria-hidden": "true" }),
                   /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "stg-drop-body", children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(HorizonPearlSvg, {}),
+                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(HorizonPearlSvg, { volume, playing: isPlaying }),
                     coverUrl && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
                       "img",
                       {
                         className: "stg-drop-cover",
                         "data-visible": showAlbumCover ? "true" : void 0,
+                        "data-dimmed": volHudVisible ? "true" : void 0,
                         src: coverUrl,
-                        alt: currentTrack?.title || media.title || "Album Cover",
+                        alt: currentTrack?.title || (isWebMode ? webMedia.title : smtcMedia.title) || "Album Cover",
                         draggable: false
                       }
                     ),
                     /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-drop-meniscus" }),
-                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-drop-play-overlay", children: isPlaying ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(PauseIcon, {}) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(PlayIcon, {}) })
+                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "stg-drop-play-overlay", "data-vol-hud": volHudVisible ? "true" : void 0, children: isPlaying ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(PauseIcon, {}) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(PlayIcon, {}) })
                   ] })
                 ]
               }
@@ -8374,7 +8569,10 @@
       stageWidth: 344,
       showCat: true,
       showPlayer: true,
+      musicSource: "smtc",
       musicFolder: "",
+      musicWebUrl: "",
+      musicVolume: 65,
       trafficLights: DEFAULT_SHORTCUTS,
       todos: [],
       todoIntervalMinutes: 60
@@ -8382,6 +8580,7 @@
     const [settingsOpen, setSettingsOpen] = (0, import_react3.useState)(false);
     const [settingsTab, setSettingsTab] = (0, import_react3.useState)("general");
     const [pathInput, setPathInput] = (0, import_react3.useState)("");
+    const [webMusicUrlInput, setWebMusicUrlInput] = (0, import_react3.useState)("");
     const [shortcutDrafts, setShortcutDrafts] = (0, import_react3.useState)([...DEFAULT_SHORTCUTS]);
     const [hoveredLightId, setHoveredLightId] = (0, import_react3.useState)(null);
     const [lightsExpanded, setLightsExpanded] = (0, import_react3.useState)(false);
@@ -8393,6 +8592,7 @@
     const [hoveredRow, setHoveredRow] = (0, import_react3.useState)(null);
     const [stageWidth, setStageWidth] = (0, import_react3.useState)(344);
     const [resizing, setResizing] = (0, import_react3.useState)(false);
+    const [nowTick, setNowTick] = (0, import_react3.useState)(() => Date.now());
     const [drafts, setDrafts] = (0, import_react3.useState)({});
     const [fieldStatus, setFieldStatus] = (0, import_react3.useState)({});
     const [fieldErrors, setFieldErrors] = (0, import_react3.useState)({});
@@ -8424,6 +8624,23 @@
       () => activeRowNumber === null ? null : snapshot?.rows.find((r) => r.rowNumber === activeRowNumber) ?? null,
       [activeRowNumber, snapshot]
     );
+    const categoryOptions = snapshot?.categoryOptions ?? DEFAULT_SERVICE_CATEGORIES;
+    const slaColOffset = (0, import_react3.useMemo)(() => {
+      const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isSlaHeader(h));
+      return idx > 0 ? idx - 1 : -1;
+    }, [snapshot?.headers]);
+    const categoryColOffset = (0, import_react3.useMemo)(() => {
+      const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isServiceCategoryHeader(h));
+      return idx > 0 ? idx - 1 : -1;
+    }, [snapshot?.headers]);
+    const subCategoryColOffset = (0, import_react3.useMemo)(() => {
+      const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isServiceSubCategoryHeader(h));
+      return idx > 0 ? idx - 1 : -1;
+    }, [snapshot?.headers]);
+    (0, import_react3.useEffect)(() => {
+      const timer = window.setInterval(() => setNowTick(Date.now()), 6e4);
+      return () => window.clearInterval(timer);
+    }, []);
     const clearHoverTimers = (0, import_react3.useCallback)(() => {
       if (hoverInTimerRef.current !== null) {
         window.clearTimeout(hoverInTimerRef.current);
@@ -8480,9 +8697,13 @@
       const onMouseLeave = () => {
         if (!resizingRef.current) pushInteractive(false);
       };
+      const offBlur = window.stageApi.onWindowBlur(() => {
+        lastInteractive = null;
+      });
       window.addEventListener("pointermove", onPointerMove, { passive: true });
       document.addEventListener("mouseleave", onMouseLeave);
       return () => {
+        offBlur();
         window.removeEventListener("pointermove", onPointerMove);
         document.removeEventListener("mouseleave", onMouseLeave);
       };
@@ -8542,12 +8763,14 @@
       void window.stageApi.getPrefs().then((p) => {
         setPrefs(p);
         setStageWidth(p.stageWidth);
+        setWebMusicUrlInput(p.musicWebUrl);
         setShortcutDrafts(p.trafficLights.map((item) => ({ ...item })));
       });
       void loadData();
       const offPrefs = window.stageApi.onPrefsChanged((p) => {
         setPrefs(p);
         setStageWidth(p.stageWidth);
+        setWebMusicUrlInput(p.musicWebUrl);
         setShortcutDrafts(p.trafficLights.map((item) => ({ ...item })));
         if (!p.showCat) {
           setTodoStageOpen(false);
@@ -8770,6 +8993,87 @@
         }
       });
     }, [enqueueSave, markFieldSaved, triggerGlobalSavedPulse]);
+    const nowDate = (0, import_react3.useMemo)(() => new Date(nowTick), [nowTick]);
+    const getCellDisplayValue = (0, import_react3.useCallback)((row, colOffset) => {
+      if (colOffset < 0 || colOffset >= row.cells.length) return "";
+      const k = cellKey(row.rowNumber, colOffset + 2);
+      return Object.hasOwn(drafts, k) ? drafts[k] : row.cells[colOffset] ?? "";
+    }, [drafts]);
+    const getRowSla = (0, import_react3.useCallback)((row) => {
+      if (slaColOffset < 0) return null;
+      return evaluateSla(getCellDisplayValue(row, slaColOffset), nowDate);
+    }, [getCellDisplayValue, nowDate, slaColOffset]);
+    const saveEditsBatch = (0, import_react3.useCallback)((edits) => {
+      if (edits.length === 0) return Promise.resolve(true);
+      if (edits.length === 1) {
+        return saveCell(edits[0].rowNumber, edits[0].colIndex, edits[0].value, false);
+      }
+      return enqueueSave(async () => {
+        const snap = snapshotRef.current;
+        if (!snap || !snap.activeSheet) return false;
+        if (conflictRef.current) return false;
+        setFieldStatus((prev) => {
+          const next = { ...prev };
+          for (const edit of edits) next[cellKey(edit.rowNumber, edit.colIndex)] = "saving";
+          return next;
+        });
+        try {
+          const res = await window.stageApi.invoke("save-batch", {
+            sheetName: snap.activeSheet,
+            edits,
+            expectedVersion: versionRef.current,
+            forceOverwrite: false
+          });
+          if (res.saved) {
+            versionRef.current = res.version;
+            const editMap = new Map(edits.map((e) => [cellKey(e.rowNumber, e.colIndex), e.value]));
+            setSnapshot((prev) => {
+              if (!prev) return prev;
+              const updatedRows = prev.rows.map((r) => {
+                const nextCells = [...r.cells];
+                let touched = false;
+                for (let c = 0; c < r.cells.length; c += 1) {
+                  const v = editMap.get(cellKey(r.rowNumber, c + 2));
+                  if (v !== void 0) {
+                    nextCells[c] = v;
+                    touched = true;
+                  }
+                }
+                return touched ? { ...r, cells: nextCells } : r;
+              });
+              return { ...prev, rows: updatedRows, version: res.version };
+            });
+            setDrafts((prev) => {
+              const copy = { ...prev };
+              for (const edit of edits) {
+                const k = cellKey(edit.rowNumber, edit.colIndex);
+                if (copy[k] === edit.value) delete copy[k];
+              }
+              return copy;
+            });
+            for (const edit of edits) markFieldSaved(cellKey(edit.rowNumber, edit.colIndex));
+            setStale(false);
+            setConflict(false);
+            setBannerError(null);
+            triggerGlobalSavedPulse();
+            return true;
+          }
+          if (res.conflict) {
+            setStale(true);
+            setConflict(true);
+          }
+          setFieldStatus((prev) => {
+            const next = { ...prev };
+            for (const edit of edits) next[cellKey(edit.rowNumber, edit.colIndex)] = "error";
+            return next;
+          });
+          return false;
+        } catch (err) {
+          setBannerError(err instanceof Error ? err.message : "\u4FDD\u5B58\u5931\u8D25");
+          return false;
+        }
+      });
+    }, [enqueueSave, markFieldSaved, saveCell, triggerGlobalSavedPulse]);
     const handleRefreshClick = (0, import_react3.useCallback)(() => {
       if (hasDirty && !stale) {
         setConfirmRefresh(true);
@@ -9343,7 +9647,7 @@
                 children: [
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-toggle-meta", children: [
                     /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-toggle-title", children: "\u663E\u793A\u6C34\u6EF4\u64AD\u653E\u5668" }),
-                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-toggle-sub", children: "\u5E73\u65F6\u7F29\u5C0F\u4E3A\u6C34\u6EF4\uFF0C\u60AC\u505C\u653E\u5927\u73B0\u9ED1\u6D1E\u5149\u6655\uFF1B\u5DE6/\u53F3\u5207\u6B4C\uFF0C\u53F3\u952E\u7BA1\u7406\u64AD\u653E\u6587\u4EF6\u5939" })
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-toggle-sub", children: "\u6DB2\u6001\u6C34\u4F4D\u968F\u97F3\u91CF\u5347\u964D \xB7 \u6EDA\u8F6E\u8C03\u97F3\u91CF\uFF0C\u652F\u6301\u7F51\u9875\u97F3\u4E50\u767B\u5F55\u540E\u540E\u53F0\u64AD\u653E" })
                   ] }),
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                     "button",
@@ -9363,29 +9667,94 @@
                 ]
               }
             ),
-            prefs.showPlayer && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-row", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "stg-settings-label", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { children: "\u672C\u5730\u97F3\u4E50\u64AD\u653E\u6587\u4EF6\u5939\uFF08\u7559\u7A7A\u5219\u76D1\u542C\u7CFB\u7EDF\u5A92\u4F53\uFF09" }) }),
-              /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-input-row", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-                  "input",
+            prefs.showPlayer && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(import_jsx_runtime4.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-row", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-label", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { children: "\u97F3\u4E50\u64AD\u653E\u6E90" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("span", { children: [
+                    "\u60AC\u505C\u7403\u4F53\u6EDA\u8F6E\u8C03\u97F3\u91CF \xB7 ",
+                    prefs.musicVolume,
+                    "%"
+                  ] })
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+                  "select",
                   {
-                    type: "text",
-                    className: "stg-input",
-                    readOnly: true,
-                    value: prefs.musicFolder || "\u5F53\u524D\u4F7F\u7528\u7CFB\u7EDF\u5A92\u4F53\u63A7\u5236 (SMTC)",
-                    title: prefs.musicFolder
-                  }
-                ),
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", className: "stg-btn", onClick: () => void window.stageApi.pickMusicFolder(), children: "\u9009\u62E9..." }),
-                prefs.musicFolder && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-                  "button",
-                  {
-                    type: "button",
-                    className: "stg-btn",
-                    onClick: () => void window.stageApi.updatePrefs({ musicFolder: "" }),
-                    children: "\u6E05\u9664"
+                    className: "stg-select",
+                    value: prefs.musicSource,
+                    onChange: (e) => void window.stageApi.updatePrefs({ musicSource: e.target.value }),
+                    children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "smtc", children: "\u7CFB\u7EDF\u5A92\u4F53\u63A7\u5236 (Windows SMTC)" }),
+                      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "local", children: "\u672C\u5730\u97F3\u4E50\u6587\u4EF6\u5939" }),
+                      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "web", children: "\u7F51\u9875\u97F3\u4E50\u7F51\u7AD9\uFF08\u7403\u5185\u767B\u5F55\u540E\u53F0\u64AD\u653E\uFF09" })
+                    ]
                   }
                 )
+              ] }),
+              prefs.musicSource === "local" && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-row", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "stg-settings-label", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { children: "\u672C\u5730\u97F3\u4E50\u64AD\u653E\u6587\u4EF6\u5939" }) }),
+                /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-input-row", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                    "input",
+                    {
+                      type: "text",
+                      className: "stg-input",
+                      readOnly: true,
+                      value: prefs.musicFolder || "\u672A\u9009\u62E9\u672C\u5730\u97F3\u4E50\u6587\u4EF6\u5939",
+                      title: prefs.musicFolder
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { type: "button", className: "stg-btn", onClick: () => void window.stageApi.pickMusicFolder(), children: "\u9009\u62E9..." }),
+                  prefs.musicFolder && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                    "button",
+                    {
+                      type: "button",
+                      className: "stg-btn",
+                      onClick: () => void window.stageApi.updatePrefs({ musicFolder: "", musicSource: "smtc" }),
+                      children: "\u6E05\u9664"
+                    }
+                  )
+                ] })
+              ] }),
+              prefs.musicSource === "web" && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-row", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "stg-settings-label", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { children: "\u97F3\u4E50\u7F51\u7AD9\u5730\u5740\uFF08\u767B\u5F55\u540E\u5173\u95ED\u7A97\u53E3\u5373\u5728\u7403\u5185\u540E\u53F0\u64AD\u653E\uFF09" }) }),
+                /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-input-row", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                    "input",
+                    {
+                      type: "text",
+                      className: "stg-input",
+                      value: webMusicUrlInput,
+                      placeholder: "\u4F8B\u5982 https://music.163.com \u6216\u79C1\u4EBA\u97F3\u4E50\u7AD9",
+                      onChange: (e) => setWebMusicUrlInput(e.target.value),
+                      onKeyDown: (e) => {
+                        if (e.key === "Enter") {
+                          void window.stageApi.openWebMusicWindow(webMusicUrlInput.trim() || void 0);
+                        }
+                      }
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                    "button",
+                    {
+                      type: "button",
+                      className: "stg-btn",
+                      "data-primary": "true",
+                      onClick: () => void window.stageApi.openWebMusicWindow(webMusicUrlInput.trim() || void 0),
+                      children: "\u6253\u5F00\u767B\u5F55"
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                    "button",
+                    {
+                      type: "button",
+                      className: "stg-btn",
+                      onClick: () => void window.stageApi.clearWebMusicSession(),
+                      title: "\u6E05\u9664\u7F51\u9875\u97F3\u4E50 Cookie \u4E0E\u767B\u5F55\u72B6\u6001",
+                      children: "\u6E05\u7F13\u5B58"
+                    }
+                  )
+                ] })
               ] })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-settings-input-row", style: { justifyContent: "space-between", alignItems: "center" }, children: [
@@ -9643,12 +10012,17 @@
         (snapshot?.rows ?? []).map((row, idx) => {
           const isActive = activeRowNumber === row.rowNumber;
           const isHovered = hoveredRow === row.rowNumber;
-          const tone = getStatusTone(row);
+          const rowSla = getRowSla(row);
           const rowHasDirty = row.cells.some((cellVal, colOffset) => {
             const k = cellKey(row.rowNumber, colOffset + 2);
             return Object.hasOwn(drafts, k) && drafts[k] !== cellVal;
           });
+          const badgeTone = rowSla ? rowSla.tone : rowHasDirty ? "accent" : getStatusTone(row);
           const previewText = row.cells.find((c) => c.trim() !== "") ?? "\uFF08\u70B9\u51FB\u5C55\u5F00\u7F16\u8F91\u8BE6\u60C5\uFF09";
+          const hoverTip = rowSla ? `${row.idText}
+${previewText}
+SLA: ${rowSla.label}` : `${row.idText}
+${previewText}`;
           return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
             "div",
             {
@@ -9659,17 +10033,18 @@
               onMouseEnter: () => handleRailMouseEnter(row.rowNumber),
               onMouseLeave: () => handleRailMouseLeave(row.rowNumber),
               onClick: () => handleSelectStage(row.rowNumber),
-              title: isHovered ? void 0 : `${row.idText}
-${previewText}`,
+              title: isHovered ? void 0 : hoverTip,
               children: [
                 /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                   "span",
                   {
                     className: "stg-corner-badge",
-                    "data-tone": rowHasDirty ? "accent" : tone,
+                    "data-tone": badgeTone,
+                    title: rowSla ? `SLA: ${rowSla.label}` : void 0,
                     children: idx + 1
                   }
                 ),
+                isHovered && rowSla && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-mini-sla", "data-tone": rowSla.tone, children: rowSla.shortLabel }),
                 /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-mini-top", children: [
                   /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-mini-id", children: isHovered || isActive ? row.idText : shortenTicketId(row.idText) }),
                   row.hyperlink && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-mini-link", title: "\u5305\u542B\u8D85\u94FE\u63A5", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(ExternalLinkIcon, {}) })
@@ -9701,10 +10076,10 @@ ${previewText}`,
                 "span",
                 {
                   className: "stg-dot",
-                  "data-tone": activeRow.cells.some((c, i) => {
+                  "data-tone": getRowSla(activeRow)?.tone ?? (activeRow.cells.some((c, i) => {
                     const k = cellKey(activeRow.rowNumber, i + 2);
                     return Object.hasOwn(drafts, k) && drafts[k] !== c;
-                  }) ? "accent" : getStatusTone(activeRow)
+                  }) ? "accent" : getStatusTone(activeRow))
                 }
               ),
               /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-stage-id", title: activeRow.idText, children: activeRow.idText }),
@@ -9738,65 +10113,151 @@ ${previewText}`,
                 }
               )
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "stg-stage-form", children: activeRow.cells.map((cellValue, colOffset) => {
-              const colIndex = colOffset + 2;
-              const key = cellKey(activeRow.rowNumber, colIndex);
-              const headerName = snapshot?.headers[colIndex - 1] ?? `\u5217 ${colIndex}`;
-              const value = Object.hasOwn(drafts, key) ? drafts[key] : cellValue;
-              const status = fieldStatus[key];
-              const errText = fieldErrors[key];
-              const flash = status === "saved" || status === "error" ? status : void 0;
-              return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field-head", children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-label", title: headerName, children: headerName }),
-                  status === "saving" && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-state", "data-state": "saving", children: "\u4FDD\u5B58\u4E2D..." }),
-                  status === "saved" && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-state", "data-state": "saved", children: "\u5DF2\u4FDD\u5B58" })
-                ] }),
-                /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-                  AutoTextarea,
-                  {
-                    ariaLabel: headerName,
-                    value,
-                    flash,
-                    placeholder: `\u8F93\u5165${headerName}...`,
-                    onChange: (nextVal) => {
-                      setDrafts((prev) => ({ ...prev, [key]: nextVal }));
-                      if (fieldStatus[key] === "error") {
-                        setFieldStatus((prev) => {
-                          const copy = { ...prev };
-                          delete copy[key];
-                          return copy;
-                        });
-                      }
-                    },
-                    onBlur: (currentVal) => {
-                      void saveCell(activeRow.rowNumber, colIndex, currentVal, false);
-                    },
-                    onKeyDown: (e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-                        e.preventDefault();
-                        void saveCell(activeRow.rowNumber, colIndex, e.currentTarget.value, false);
-                      } else if (e.key === "Escape") {
-                        e.currentTarget.blur();
-                        setActiveRowNumber(null);
-                      }
-                    }
-                  }
-                ),
-                errText && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field-error", children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { children: errText }),
-                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
-                    "button",
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("div", { className: "stg-stage-form", children: (() => {
+              const hasCategoryPair = categoryColOffset >= 0 && subCategoryColOffset >= 0;
+              const firstCategoryOffset = hasCategoryPair ? Math.min(categoryColOffset, subCategoryColOffset) : -1;
+              const secondCategoryOffset = hasCategoryPair ? Math.max(categoryColOffset, subCategoryColOffset) : -1;
+              const renderCategoryDropdown = (offset, isParent) => {
+                const colIndex = offset + 2;
+                const key = cellKey(activeRow.rowNumber, colIndex);
+                const headerName = snapshot?.headers[colIndex - 1] ?? (isParent ? "\u670D\u52A1\u5206\u7C7B" : "\u670D\u52A1\u5B50\u5206\u7C7B");
+                const value = getCellDisplayValue(activeRow, offset);
+                const status = fieldStatus[key];
+                const errText = fieldErrors[key];
+                const flash = status === "saved" || status === "error" ? status : void 0;
+                const parentValue = categoryColOffset >= 0 ? getCellDisplayValue(activeRow, categoryColOffset).trim() : "";
+                const baseOptions = isParent ? Object.keys(categoryOptions) : parentValue ? categoryOptions[parentValue] ?? [] : [];
+                const optionList = value.trim() !== "" && !baseOptions.includes(value.trim()) ? [value.trim(), ...baseOptions] : baseOptions;
+                return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field-head", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-label", title: headerName, children: headerName }),
+                    status === "saving" && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-state", "data-state": "saving", children: "\u4FDD\u5B58\u4E2D..." }),
+                    status === "saved" && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-state", "data-state": "saved", children: "\u5DF2\u4FDD\u5B58" })
+                  ] }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+                    "select",
                     {
-                      type: "button",
-                      className: "stg-retry-link",
-                      onClick: () => void saveCell(activeRow.rowNumber, colIndex, value, conflict),
-                      children: conflict ? "\u5F3A\u5236\u8986\u76D6" : "\u91CD\u8BD5"
+                      className: "stg-select",
+                      "aria-label": headerName,
+                      "data-flash": flash,
+                      disabled: !isParent && !parentValue,
+                      value: value.trim(),
+                      onChange: (e) => {
+                        const nextVal = e.target.value;
+                        if (isParent) {
+                          const nextSubs = categoryOptions[nextVal] ?? [];
+                          const subColIdx = subCategoryColOffset + 2;
+                          const subKey = cellKey(activeRow.rowNumber, subColIdx);
+                          const curSub = subCategoryColOffset >= 0 ? getCellDisplayValue(activeRow, subCategoryColOffset).trim() : "";
+                          const resetSub = subCategoryColOffset >= 0 && curSub !== "" && !nextSubs.includes(curSub);
+                          setDrafts((prev) => ({
+                            ...prev,
+                            [key]: nextVal,
+                            ...resetSub ? { [subKey]: "" } : {}
+                          }));
+                          const edits = [{ rowNumber: activeRow.rowNumber, colIndex, value: nextVal }];
+                          if (resetSub) {
+                            edits.push({ rowNumber: activeRow.rowNumber, colIndex: subColIdx, value: "" });
+                          }
+                          void saveEditsBatch(edits);
+                        } else {
+                          setDrafts((prev) => ({ ...prev, [key]: nextVal }));
+                          void saveCell(activeRow.rowNumber, colIndex, nextVal, false);
+                        }
+                      },
+                      children: [
+                        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: "", children: isParent ? "\u9009\u62E9\u670D\u52A1\u5206\u7C7B..." : parentValue ? "\u9009\u62E9\u670D\u52A1\u5B50\u5206\u7C7B..." : "\u8BF7\u5148\u9009\u670D\u52A1\u5206\u7C7B" }),
+                        optionList.map((opt) => /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("option", { value: opt, children: opt }, opt))
+                      ]
                     }
-                  )
-                ] })
-              ] }, key);
-            }) })
+                  ),
+                  errText && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field-error", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { children: errText }),
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                      "button",
+                      {
+                        type: "button",
+                        className: "stg-retry-link",
+                        onClick: () => void saveCell(activeRow.rowNumber, colIndex, value, conflict),
+                        children: conflict ? "\u5F3A\u5236\u8986\u76D6" : "\u91CD\u8BD5"
+                      }
+                    )
+                  ] })
+                ] }, key);
+              };
+              return activeRow.cells.map((cellValue, colOffset) => {
+                if (hasCategoryPair && colOffset === secondCategoryOffset) {
+                  return null;
+                }
+                if (hasCategoryPair && colOffset === firstCategoryOffset) {
+                  return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field-pair", children: [
+                    renderCategoryDropdown(categoryColOffset, true),
+                    renderCategoryDropdown(subCategoryColOffset, false)
+                  ] }, `cat-pair-${activeRow.rowNumber}`);
+                }
+                const colIndex = colOffset + 2;
+                const key = cellKey(activeRow.rowNumber, colIndex);
+                const headerName = snapshot?.headers[colIndex - 1] ?? `\u5217 ${colIndex}`;
+                const value = Object.hasOwn(drafts, key) ? drafts[key] : cellValue;
+                const status = fieldStatus[key];
+                const errText = fieldErrors[key];
+                const flash = status === "saved" || status === "error" ? status : void 0;
+                const cellSla = colOffset === slaColOffset ? evaluateSla(value, nowDate) : null;
+                return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field-head", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-label", title: headerName, children: headerName }),
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { style: { display: "inline-flex", alignItems: "center", gap: 6 }, children: [
+                      cellSla && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-sla-pill", "data-tone": cellSla.tone, children: cellSla.label }),
+                      status === "saving" && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-state", "data-state": "saving", children: "\u4FDD\u5B58\u4E2D..." }),
+                      status === "saved" && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "stg-field-state", "data-state": "saved", children: "\u5DF2\u4FDD\u5B58" })
+                    ] })
+                  ] }),
+                  /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                    AutoTextarea,
+                    {
+                      ariaLabel: headerName,
+                      value,
+                      flash,
+                      placeholder: `\u8F93\u5165${headerName}...`,
+                      onChange: (nextVal) => {
+                        setDrafts((prev) => ({ ...prev, [key]: nextVal }));
+                        if (fieldStatus[key] === "error") {
+                          setFieldStatus((prev) => {
+                            const copy = { ...prev };
+                            delete copy[key];
+                            return copy;
+                          });
+                        }
+                      },
+                      onBlur: (currentVal) => {
+                        void saveCell(activeRow.rowNumber, colIndex, currentVal, false);
+                      },
+                      onKeyDown: (e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+                          e.preventDefault();
+                          void saveCell(activeRow.rowNumber, colIndex, e.currentTarget.value, false);
+                        } else if (e.key === "Escape") {
+                          e.currentTarget.blur();
+                          setActiveRowNumber(null);
+                        }
+                      }
+                    }
+                  ),
+                  errText && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "stg-field-error", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { children: errText }),
+                    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+                      "button",
+                      {
+                        type: "button",
+                        className: "stg-retry-link",
+                        onClick: () => void saveCell(activeRow.rowNumber, colIndex, value, conflict),
+                        children: conflict ? "\u5F3A\u5236\u8986\u76D6" : "\u91CD\u8BD5"
+                      }
+                    )
+                  ] })
+                ] }, key);
+              });
+            })() })
           ]
         },
         activeRow.rowNumber
@@ -9825,7 +10286,14 @@ ${previewText}`,
           onToggleStage: handleToggleTodoStage
         }
       ),
-      prefs.showPlayer && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(SiriMusicOrb, {})
+      prefs.showPlayer && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+        SiriMusicOrb,
+        {
+          musicSource: prefs.musicSource,
+          musicWebUrl: prefs.musicWebUrl,
+          musicVolume: prefs.musicVolume
+        }
+      )
     ] });
   }
 
@@ -10613,6 +11081,30 @@ html, body, #root {
 .stg-corner-badge[data-tone='ok'] { background: linear-gradient(135deg, #34d399, #16a34a); }
 .stg-corner-badge[data-tone='accent'] { background: linear-gradient(135deg, #60a5fa, #3b6fe0); }
 
+/* Hovered mini-card SLA remaining working hours pill beside corner badge */
+.stg-mini-sla {
+  position: absolute;
+  left: 17px;
+  bottom: -5px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #fff;
+  pointer-events: none;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.stg-mini-sla[data-tone='err'] { background: linear-gradient(135deg, #f43f5e, #dc2626); }
+.stg-mini-sla[data-tone='warn'] { background: linear-gradient(135deg, #fbbf24, #d97706); }
+.stg-mini-sla[data-tone='ok'] { background: linear-gradient(135deg, #34d399, #16a34a); }
+
 /* =========================================================
  * Foreground "On Stage" Floating Card
  * ========================================================= */
@@ -10744,7 +11236,38 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
 }
+
+.stg-field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.stg-select[data-flash='saved'] {
+  border-color: var(--stg-ok-fg);
+  box-shadow: 0 0 0 1px var(--stg-ok-fg);
+}
+
+.stg-select[data-flash='error'] {
+  border-color: var(--stg-err-fg);
+  box-shadow: 0 0 0 1px var(--stg-err-fg);
+}
+
+.stg-sla-pill {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #fff;
+}
+
+.stg-sla-pill[data-tone='err'] { background: linear-gradient(135deg, #f43f5e, #dc2626); }
+.stg-sla-pill[data-tone='warn'] { background: linear-gradient(135deg, #fbbf24, #d97706); }
+.stg-sla-pill[data-tone='ok'] { background: linear-gradient(135deg, #34d399, #16a34a); }
 
 .stg-field-head {
   display: flex;
@@ -11341,6 +11864,32 @@ html, body, #root {
   white-space: nowrap;
 }
 
+.stg-orb-vol-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: rgba(56, 189, 248, 0.16);
+  color: rgb(2, 132, 199);
+  transition: transform 140ms var(--stg-ease), background 140ms ease, color 140ms ease;
+}
+
+.stg-root[data-theme='dark'] .stg-orb-vol-badge {
+  color: rgb(125, 211, 252);
+}
+
+.stg-orb-vol-badge[data-active='true'] {
+  transform: scale(1.06);
+  background: rgba(245, 158, 11, 0.24);
+  color: rgb(217, 119, 6);
+}
+
+.stg-root[data-theme='dark'] .stg-orb-vol-badge[data-active='true'] {
+  color: rgb(252, 211, 77);
+}
+
 .stg-drop-cluster {
   pointer-events: auto;
   display: inline-flex;
@@ -11508,6 +12057,36 @@ html, body, #root {
   display: block;
 }
 
+.stg-water-level {
+  transition: transform 240ms var(--stg-ease);
+}
+
+.stg-water-wave-front {
+  animation: stg-wave-flow 4.4s linear infinite;
+}
+
+.stg-water-wave-back {
+  animation: stg-wave-flow-rev 6.2s linear infinite;
+}
+
+.stg-water-level[data-playing='true'] .stg-water-wave-front {
+  animation-duration: 2.3s;
+}
+
+.stg-water-level[data-playing='true'] .stg-water-wave-back {
+  animation-duration: 3.4s;
+}
+
+@keyframes stg-wave-flow {
+  0% { transform: translateX(0px); }
+  100% { transform: translateX(-100px); }
+}
+
+@keyframes stg-wave-flow-rev {
+  0% { transform: translateX(-100px); }
+  100% { transform: translateX(0px); }
+}
+
 .stg-drop-cover {
   position: absolute;
   inset: 0;
@@ -11521,6 +12100,10 @@ html, body, #root {
 
 .stg-drop-cover[data-visible='true'] {
   opacity: 1;
+}
+
+.stg-drop-cover[data-visible='true'][data-dimmed='true'] {
+  opacity: 0.2;
 }
 
 .stg-drop-meniscus {
@@ -11546,7 +12129,7 @@ html, body, #root {
   transition: opacity 160ms ease;
 }
 
-.stg-drop-sphere:hover .stg-drop-play-overlay {
+.stg-drop-sphere:hover .stg-drop-play-overlay:not([data-vol-hud='true']) {
   opacity: 1;
 }
 
@@ -11563,7 +12146,10 @@ html, body, #root {
   .stg-drop-sphere,
   .stg-drop-side,
   .stg-blackhole-halo,
-  .stg-blackhole-disk {
+  .stg-blackhole-disk,
+  .stg-water-level,
+  .stg-water-wave-front,
+  .stg-water-wave-back {
     transition: none !important;
     animation: none !important;
   }

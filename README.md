@@ -26,6 +26,7 @@ webprogram/
 │   ├── stop-bridge.bat
 │   └── extension/
 ├── win-incident-stage/                 # Windows 桌面端 iPadOS 前台调度风事件单悬浮台（含快捷红绿灯 / 键盘小猫待办 / 悬浮球播放器）
+│   ├── incidents-template.xlsx         # 标准 9 列事件单 Excel 模板（含服务分类字典）
 │   ├── start-desktop.bat
 │   └── start-desktop-silent.vbs
 └── README.md
@@ -66,18 +67,18 @@ webprogram/
 ### 4. DeepSeek Harness 事件单悬浮侧边栏 (`dsh-plugin-incident-drawer`)
 
 - **技术栈**：Cordis 双端插件（Host Excel 无损读写 + Client `shell.overlay` React 悬浮抽屉，零运行时外部依赖）
-- **核心功能**：贴合 DSH 右侧边缘、悬停向左展开单号、点击手风琴展开动态表头编辑、第 1 列只读超链接跳转、失焦自动保存与外部变更防覆盖。详见 [dsh-plugin-incident-drawer/README.md](dsh-plugin-incident-drawer/README.md)。
+- **核心功能**：贴合 DSH 右侧边缘、悬停向左展开单号及 SLA 工时、点击手风琴展开动态表头编辑（支持 9 列模板「服务分类 / 服务子分类」单行联动下拉与周一至周五 `08:30–18:00` SLA 红黄绿角标）、第 1 列只读超链接跳转、失焦自动保存与外部变更防覆盖，与 Chrome 扩展及 Windows 桌面端三端共享配置和 Excel。详见 [dsh-plugin-incident-drawer/README.md](dsh-plugin-incident-drawer/README.md)。
 
 ### 5. Chrome 事件单悬浮侧边栏 (`chrome-incident-drawer`)
 
 - **默认伴生服务地址**：`http://127.0.0.1:17892/`
 - **技术栈**：Chrome Manifest V3（Shadow DOM 隔离 UI）+ 零依赖本地 Node 伴生服务
-- **核心功能**：与 DSH 插件共用同一份配置与本地 Excel，支持网页右侧悬浮编辑、黑白名单域名规则及深浅色主题。详见 [chrome-incident-drawer/README.md](chrome-incident-drawer/README.md)。
+- **核心功能**：与 DSH 插件及 Windows 桌面端三端共用同一份配置与本地 Excel，支持网页右侧悬浮编辑、9 列「服务分类 / 服务子分类」单行联动下拉、工作日 `08:30–18:00` SLA 红黄绿角标与悬停工时提示、黑白名单域名规则及深浅色主题。详见 [chrome-incident-drawer/README.md](chrome-incident-drawer/README.md)。
 
 ### 6. Windows 事件单前台调度台 (`win-incident-stage`)
 
 - **技术栈**：Electron 透明置顶穿透窗 + React + TypeScript + iPadOS 前台调度（Stage Manager）3D UI + Win32/SMTC 系统集成
-- **核心功能**：全局置顶悬浮在所有桌面应用上方（空白处完全鼠标穿透），与 DSH 和 Chrome 插件三端共用配置与本地 Excel；右侧 3D 透视事件单与可拖拽调宽前台编辑卡片、顶部状态按钮下方分离式 macOS 快捷红绿灯（支持组合键录制）、右下角经典键盘小猫与全息前景待办卡片、琉璃光弧悬浮球音乐播放器（悬停放大黑洞光晕 + 专辑封面 + 本地音乐目录/Windows SMTC 联动），并支持打包绿色便携 `IncidentStage.exe`。详见 [win-incident-stage/README.md](win-incident-stage/README.md)。
+- **核心功能**：全局置顶悬浮在所有桌面应用上方（空白处完全鼠标穿透），与 DSH 和 Chrome 插件三端共用配置与本地 Excel（根目录自带标准 9 列 [incidents-template.xlsx](win-incident-stage/incidents-template.xlsx) 模板）；右侧 3D 透视事件单（工作日 `08:30–18:00` SLA 红黄绿角标 + 悬停工时提示）与可拖拽调宽前台编辑卡片（单行联动分类下拉）、顶部状态按钮下方分离式 macOS 快捷红绿灯（支持组合键录制）、右下角经典键盘小猫与全息前景待办卡片、琉璃光弧悬浮球音乐播放器（悬停放大黑洞光晕 + 滚轮调节动态液态水位音量 + 网页音乐内嵌登录 / 本地音乐目录 / Windows SMTC 联动），并支持打包绿色便携 `IncidentStage.exe`。详见 [win-incident-stage/README.md](win-incident-stage/README.md)。
 
 ---
 

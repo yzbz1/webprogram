@@ -450,7 +450,7 @@ export const DRAWER_CSS = `
 }
 
 .idw-card[data-state='hover'] {
-  width: var(--idw-hover-width, 224px);
+  width: var(--idw-hover-width, 248px);
   border-radius: 12px 0 0 12px;
   background: var(--idw-tab-hover-bg);
   box-shadow: var(--idw-shadow-hover);
@@ -659,7 +659,43 @@ export const DRAWER_CSS = `
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
 }
+
+.idw-field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.idw-select[data-flash='saved'] {
+  box-shadow: inset 0 0 0 1px var(--idw-ok-fg);
+}
+
+.idw-select[data-flash='error'] {
+  border-color: var(--idw-err-fg);
+  box-shadow: inset 0 0 0 1px var(--idw-err-fg);
+}
+
+.idw-mini-sla,
+.idw-sla-pill {
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.idw-mini-sla[data-tone='err'],
+.idw-sla-pill[data-tone='err'] { background: linear-gradient(135deg, #f43f5e, #dc2626); }
+.idw-mini-sla[data-tone='warn'],
+.idw-sla-pill[data-tone='warn'] { background: linear-gradient(135deg, #fbbf24, #d97706); }
+.idw-mini-sla[data-tone='ok'],
+.idw-sla-pill[data-tone='ok'] { background: linear-gradient(135deg, #34d399, #16a34a); }
 
 .idw-field-head {
   display: flex;

@@ -71580,13 +71580,17 @@ var require_excel = __commonJS({
 // src/main/excel-store.ts
 var excel_store_exports = {};
 __export(excel_store_exports, {
+  CATEGORY_DICT_SHEET_NAMES: () => CATEGORY_DICT_SHEET_NAMES,
   MAX_EDITABLE_COL: () => MAX_EDITABLE_COL,
   MAX_ROWS: () => MAX_ROWS,
   MAX_SCAN_COLS: () => MAX_SCAN_COLS,
   SAMPLE_HEADERS: () => SAMPLE_HEADERS,
+  applyCategoryDictionary: () => applyCategoryDictionary,
   checkWorkbookStatus: () => checkWorkbookStatus,
   computeFileVersion: () => computeFileVersion,
+  computeWorkingHoursRemaining: () => computeWorkingHoursRemaining,
   createSampleWorkbook: () => createSampleWorkbook,
+  evaluateSla: () => evaluateSla,
   formatCellValue: () => formatCellValue,
   getTodayDateCandidates: () => getTodayDateCandidates,
   getTodaySheetName: () => getTodaySheetName,
@@ -71601,16 +71605,159 @@ var import_node_fs = require("node:fs");
 var import_promises = require("node:fs/promises");
 var import_node_path = require("node:path");
 var import_exceljs = __toESM(require_excel());
+
+// src/shared/sla.ts
+var DEFAULT_SERVICE_CATEGORIES = {
+  \u57FA\u7840\u67B6\u6784: ["\u7F51\u7EDC\u4E0E\u7F51\u5173", "\u670D\u52A1\u5668\u4E0E\u78C1\u76D8", "\u5BB9\u5668\u4E0E\u8BC1\u4E66"],
+  \u5E94\u7528\u7CFB\u7EDF: ["\u5355\u70B9\u767B\u5F55\u4E0E\u8BA4\u8BC1", "OA\u4E0E\u5BA1\u6279\u6D41", "\u8D22\u52A1\u4E0E\u62A5\u8868"],
+  \u4E2D\u95F4\u4EF6\u4E0E\u6570\u636E: ["\u6D88\u606F\u961F\u5217", "\u6570\u636E\u5E93\u4E0ESQL", "\u7F13\u5B58\u4E0E\u68C0\u7D22"],
+  \u53D1\u5E03\u4E0E\u8FD0\u7EF4: ["CI/CD\u6D41\u6C34\u7EBF", "CDN\u4E0E\u9759\u6001\u8D44\u6E90", "\u5B9A\u65F6\u4EFB\u52A1\u8C03\u5EA6"]
+};
+var WORK_START_MIN = 8 * 60 + 30;
+var WORK_END_MIN = 18 * 60;
+var MS_PER_MIN = 6e4;
+var MS_PER_HOUR = 36e5;
+function parseLocalDateTime(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/.exec(
+    trimmed
+  );
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = match[4] !== void 0 ? Number(match[4]) : 18;
+  const minute = match[5] !== void 0 ? Number(match[5]) : 0;
+  const second = match[6] !== void 0 ? Number(match[6]) : 0;
+  if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+    return null;
+  }
+  const d = new Date(year, month - 1, day, hour, minute, second, 0);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
+    return null;
+  }
+  return d;
+}
+function formatLocalDateTime(date) {
+  const y = String(date.getFullYear());
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${y}-${m}-${d} ${hh}:${mm}`;
+}
+function sumWorkingMsBetween(startMs, endMs) {
+  if (endMs <= startMs) return 0;
+  const cursor = new Date(startMs);
+  cursor.setHours(0, 0, 0, 0);
+  let totalMs = 0;
+  for (let days = 0; days < 366; days += 1) {
+    const dayStartMs = cursor.getTime();
+    if (dayStartMs >= endMs) break;
+    const dow = cursor.getDay();
+    if (dow >= 1 && dow <= 5) {
+      const workStart = dayStartMs + WORK_START_MIN * MS_PER_MIN;
+      const workEnd = dayStartMs + WORK_END_MIN * MS_PER_MIN;
+      const overlapStart = Math.max(startMs, workStart);
+      const overlapEnd = Math.min(endMs, workEnd);
+      if (overlapEnd > overlapStart) {
+        totalMs += overlapEnd - overlapStart;
+      }
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return totalMs;
+}
+function computeWorkingHoursRemaining(deadline, now = /* @__PURE__ */ new Date()) {
+  const startMs = now.getTime();
+  const endMs = deadline.getTime();
+  if (endMs === startMs) return 0;
+  if (endMs > startMs) {
+    return sumWorkingMsBetween(startMs, endMs) / MS_PER_HOUR;
+  }
+  return -(sumWorkingMsBetween(endMs, startMs) / MS_PER_HOUR);
+}
+function addWorkingHours(start, hours) {
+  if (hours === 0) return new Date(start.getTime());
+  const forward = hours > 0;
+  let remainingMs = Math.abs(hours) * MS_PER_HOUR;
+  const cursor = new Date(start.getTime());
+  for (let step = 0; step < 500 && remainingMs > 0; step += 1) {
+    const dayBase = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), 0, 0, 0, 0);
+    const dow = dayBase.getDay();
+    if (dow >= 1 && dow <= 5) {
+      const workStart = dayBase.getTime() + WORK_START_MIN * MS_PER_MIN;
+      const workEnd = dayBase.getTime() + WORK_END_MIN * MS_PER_MIN;
+      if (forward) {
+        const segStart = Math.max(cursor.getTime(), workStart);
+        if (segStart < workEnd) {
+          const avail = workEnd - segStart;
+          if (remainingMs <= avail) {
+            return new Date(segStart + remainingMs);
+          }
+          remainingMs -= avail;
+        }
+      } else {
+        const segEnd = Math.min(cursor.getTime(), workEnd);
+        if (segEnd > workStart) {
+          const avail = segEnd - workStart;
+          if (remainingMs <= avail) {
+            return new Date(segEnd - remainingMs);
+          }
+          remainingMs -= avail;
+        }
+      }
+    }
+    if (forward) {
+      dayBase.setDate(dayBase.getDate() + 1);
+      cursor.setTime(dayBase.getTime() + WORK_START_MIN * MS_PER_MIN);
+    } else {
+      dayBase.setDate(dayBase.getDate() - 1);
+      cursor.setTime(dayBase.getTime() + WORK_END_MIN * MS_PER_MIN);
+    }
+  }
+  return cursor;
+}
+function evaluateSla(rawValue, now = /* @__PURE__ */ new Date()) {
+  const deadline = parseLocalDateTime(rawValue);
+  if (!deadline) return null;
+  const remainingHours = computeWorkingHoursRemaining(deadline, now);
+  const tone = remainingHours < 4 ? "err" : remainingHours <= 8 ? "warn" : "ok";
+  let label;
+  let shortLabel;
+  if (deadline.getTime() <= now.getTime()) {
+    label = "\u5DF2\u8D85\u65F6";
+    shortLabel = "\u8D85\u65F6";
+  } else if (remainingHours < 0.1) {
+    label = "\u5373\u5C06\u5230\u671F";
+    shortLabel = "0.1h";
+  } else {
+    const rounded = remainingHours.toFixed(1);
+    label = `\u5DE5\u4F5C\u5269\u4F59 ${rounded}h`;
+    shortLabel = `${rounded}h`;
+  }
+  return { deadline, remainingHours, tone, label, shortLabel };
+}
+
+// src/main/excel-store.ts
 var MAX_ROWS = 10;
 var MAX_SCAN_COLS = 30;
 var MAX_EDITABLE_COL = 50;
+var CATEGORY_DICT_SHEET_NAMES = /* @__PURE__ */ new Set([
+  "\u670D\u52A1\u5206\u7C7B\u5B57\u5178",
+  "\u5206\u7C7B\u5B57\u5178"
+]);
 var SAMPLE_HEADERS = [
   "\u4E8B\u4EF6\u5355\u53F7",
   "\u6807\u9898",
-  "\u7D27\u6025\u7A0B\u5EA6",
-  "\u5904\u7406\u72B6\u6001",
-  "\u8D1F\u8D23\u4EBA",
-  "\u5904\u7406\u8FDB\u5C55"
+  "\u95EE\u9898\u63CF\u8FF0",
+  "\u670D\u52A1\u5206\u7C7B",
+  "\u670D\u52A1\u5B50\u5206\u7C7B",
+  "\u89E3\u51B3\u65B9\u6848\uFF1A",
+  "SLA \u5230\u671F\u65F6\u95F4",
+  "\u63D0\u5355\u4EBA",
+  "\u5904\u7406\u7FA4\u7EC4\uFF08welink\u7FA4\uFF09"
 ];
 var LOCK_ERROR_CODES = /* @__PURE__ */ new Set(["EBUSY", "EPERM", "EACCES"]);
 var writeQueues = /* @__PURE__ */ new Map();
@@ -71759,8 +71906,35 @@ function parseTicketCell(cell) {
     hyperlink: cellLevelLink ?? sanitizeHttpUrl(plain)
   };
 }
+function extractCategoryOptions(workbook) {
+  for (const name of CATEGORY_DICT_SHEET_NAMES) {
+    const dictWs = workbook.getWorksheet(name);
+    if (!dictWs) continue;
+    const parsed = {};
+    const maxCol = Math.min(Math.max(dictWs.columnCount, 1), 30);
+    const headerRow = dictWs.getRow(1);
+    for (let c = 1; c <= maxCol; c += 1) {
+      const parent = formatCellValue(headerRow.getCell(c).value).trim();
+      if (!parent) continue;
+      const subs = [];
+      for (let r = 2; r <= dictWs.rowCount; r += 1) {
+        const sub = formatCellValue(dictWs.getRow(r).getCell(c).value).trim();
+        if (sub && !subs.includes(sub)) {
+          subs.push(sub);
+        }
+      }
+      if (subs.length > 0) {
+        parsed[parent] = subs;
+      }
+    }
+    if (Object.keys(parsed).length > 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_SERVICE_CATEGORIES;
+}
 function resolveTargetSheet(workbook, requestedSheetName, now = /* @__PURE__ */ new Date()) {
-  const sheetNames = workbook.worksheets.map((ws) => ws.name);
+  const sheetNames = workbook.worksheets.map((ws) => ws.name).filter((name) => !CATEGORY_DICT_SHEET_NAMES.has(name.trim()));
   const candidates = getTodayDateCandidates(now).map((c) => c.toLowerCase());
   if (requestedSheetName && requestedSheetName.trim() !== "") {
     const target = requestedSheetName.trim();
@@ -71912,7 +72086,8 @@ async function loadWorkbookData(excelPath, requestedSheetName, now = /* @__PURE_
       headers,
       rows,
       version: version2,
-      totalDataRows
+      totalDataRows,
+      categoryOptions: extractCategoryOptions(workbook)
     };
   } catch (error) {
     return {
@@ -72033,6 +72208,45 @@ async function saveCellsToWorkbook(params) {
     }
   });
 }
+function applyCategoryDictionary(workbook, targetSheet, categoryColIndex, subCategoryColIndex, maxRow = 30) {
+  const existing = workbook.getWorksheet("\u670D\u52A1\u5206\u7C7B\u5B57\u5178");
+  if (existing) {
+    workbook.removeWorksheet(existing.id);
+  }
+  const dictWs = workbook.addWorksheet("\u670D\u52A1\u5206\u7C7B\u5B57\u5178");
+  const parents = Object.keys(DEFAULT_SERVICE_CATEGORIES);
+  const colLetters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"];
+  parents.forEach((parent, idx) => {
+    const colNum = idx + 1;
+    const colLetter = colLetters[idx];
+    const headCell = dictWs.getRow(1).getCell(colNum);
+    headCell.value = parent;
+    headCell.font = { bold: true };
+    dictWs.getColumn(colNum).width = 18;
+    const subs = DEFAULT_SERVICE_CATEGORIES[parent] ?? [];
+    subs.forEach((sub, subIdx) => {
+      dictWs.getRow(subIdx + 2).getCell(colNum).value = sub;
+    });
+    if (colLetter && subs.length > 0) {
+      workbook.definedNames.add(`'\u670D\u52A1\u5206\u7C7B\u5B57\u5178'!$${colLetter}$2:$${colLetter}$${subs.length + 1}`, parent);
+    }
+  });
+  const lastParentCol = colLetters[Math.max(0, parents.length - 1)] ?? "D";
+  const parentFormula = `'\u670D\u52A1\u5206\u7C7B\u5B57\u5178'!$A$1:$${lastParentCol}$1`;
+  const catColLetter = colLetters[categoryColIndex - 1] ?? "D";
+  for (let r = 2; r <= maxRow; r += 1) {
+    targetSheet.getRow(r).getCell(categoryColIndex).dataValidation = {
+      type: "list",
+      allowBlank: true,
+      formulae: [parentFormula]
+    };
+    targetSheet.getRow(r).getCell(subCategoryColIndex).dataValidation = {
+      type: "list",
+      allowBlank: true,
+      formulae: [`=INDIRECT(${catColLetter}${r})`]
+    };
+  }
+}
 async function createSampleWorkbook(excelPath, now = /* @__PURE__ */ new Date()) {
   const resolvedPath = (0, import_node_path.resolve)(excelPath);
   await (0, import_promises.mkdir)((0, import_node_path.dirname)(resolvedPath), { recursive: true });
@@ -72044,12 +72258,15 @@ async function createSampleWorkbook(excelPath, now = /* @__PURE__ */ new Date())
   workbook.created = now;
   const wsToday = workbook.addWorksheet(today);
   wsToday.columns = [
-    { width: 22 },
-    { width: 32 },
-    { width: 14 },
-    { width: 14 },
-    { width: 14 },
-    { width: 40 }
+    { width: 20 },
+    { width: 30 },
+    { width: 36 },
+    { width: 15 },
+    { width: 17 },
+    { width: 34 },
+    { width: 19 },
+    { width: 12 },
+    { width: 22 }
   ];
   const headerRow = wsToday.addRow([...SAMPLE_HEADERS]);
   headerRow.font = { bold: true };
@@ -72058,67 +72275,68 @@ async function createSampleWorkbook(excelPath, now = /* @__PURE__ */ new Date())
     pattern: "solid",
     fgColor: { argb: "FFEFF3FA" }
   };
+  const sla = (workHours) => formatLocalDateTime(addWorkingHours(now, workHours));
   const sampleRows = [
     {
       id: `INC-${today}-01`,
       url: `https://itsm.company.internal/tickets/INC-${today}-01`,
-      cols: ["\u6838\u5FC3\u7F51\u5173\u8FDE\u63A5\u6C60\u8D85\u65F6\u544A\u8B66", "P1 \u7D27\u6025", "\u5904\u7406\u4E2D", "\u5F20\u4F1F", "\u5DF2\u5B9A\u4F4D\u6162\u67E5\u8BE2 SQL\uFF0C\u6B63\u5728\u7070\u5EA6\u56DE\u6EDA\u7D22\u5F15\u53D8\u66F4\u5E76\u4E34\u65F6\u6269\u5BB9\u8FDE\u63A5\u6C60"]
+      cols: ["[CI]\u6838\u5FC3\u7F51\u5173\u8FDE\u63A5\u6C60\u8D85\u65F6\u544A\u8B66", "\u4E1A\u52A1\u8BF7\u6C42\u95F4\u6B47\u6027 504\uFF0C\u8FDE\u63A5\u6C60\u7B49\u5F85\u961F\u5217\u6253\u6EE1", "\u57FA\u7840\u67B6\u6784", "\u7F51\u7EDC\u4E0E\u7F51\u5173", "\u6B63\u5728\u7070\u5EA6\u56DE\u6EDA\u7D22\u5F15\u53D8\u66F4\u5E76\u4E34\u65F6\u6269\u5BB9\u8FDE\u63A5\u6C60", sla(1.8), "\u5F20\u4F1F", "\u6838\u5FC3\u7F51\u7EDC\u4FDD\u969C\u7FA4"]
     },
     {
       id: `INC-${today}-02`,
       url: `https://itsm.company.internal/tickets/INC-${today}-02`,
       formulaLink: true,
-      cols: ["\u5185\u7F51 SSO \u5355\u70B9\u767B\u5F55\u56DE\u8C03 502", "P1 \u7D27\u6025", "\u5F85\u5904\u7406", "\u674E\u654F", "\u7B49\u5F85\u8BA4\u8BC1\u4E2D\u5FC3\u63D0\u4F9B\u7F51\u5173\u65E5\u5FD7\u4E0E\u8BC1\u4E66\u94FE\u6838\u9A8C\u7ED3\u679C"]
+      cols: ["\u5185\u7F51 SSO \u5355\u70B9\u767B\u5F55\u56DE\u8C03 502", "\u90E8\u5206\u90E8\u95E8\u767B\u5F55\u8DF3\u8F6C\u8BA4\u8BC1\u4E2D\u5FC3\u8FD4\u56DE 502", "\u5E94\u7528\u7CFB\u7EDF", "\u5355\u70B9\u767B\u5F55\u4E0E\u8BA4\u8BC1", "\u7B49\u5F85\u8BA4\u8BC1\u4E2D\u5FC3\u63D0\u4F9B\u7F51\u5173\u65E5\u5FD7\u4E0E\u8BC1\u4E66\u94FE\u6838\u9A8C", sla(3.2), "\u674E\u654F", "\u7EDF\u4E00\u8BA4\u8BC1\u652F\u6301\u7FA4"]
     },
     {
       id: `INC-${today}-03`,
       url: `https://itsm.company.internal/tickets/INC-${today}-03`,
-      cols: ["\u62A5\u8868\u5BFC\u51FA\u670D\u52A1\u5185\u5B58\u6301\u7EED\u4E0A\u6DA8", "P2 \u9AD8", "\u5904\u7406\u4E2D", "\u738B\u5F3A", "\u5DF2\u91C7\u96C6\u5806\u8F6C\u50A8\u6587\u4EF6\uFF0C\u521D\u6B65\u6000\u7591 Excel \u6D41\u5F0F\u5BFC\u51FA\u672A\u53CA\u65F6\u91CA\u653E"]
+      cols: ["\u62A5\u8868\u5BFC\u51FA\u670D\u52A1\u5185\u5B58\u6301\u7EED\u4E0A\u6DA8", "\u5927\u6279\u91CF\u5BFC\u51FA\u89E6\u53D1 OldGen \u9891\u7E41 FullGC", "\u5E94\u7528\u7CFB\u7EDF", "\u8D22\u52A1\u4E0E\u62A5\u8868", "\u5DF2\u91C7\u96C6\u5806\u8F6C\u50A8\uFF0C\u6392\u67E5 Excel \u6D41\u5F0F\u91CA\u653E", sla(5.5), "\u738B\u5F3A", "\u8D22\u52A1\u7CFB\u7EDF\u8FD0\u7EF4\u7FA4"]
     },
     {
       id: `INC-${today}-04`,
       url: `https://itsm.company.internal/tickets/INC-${today}-04`,
-      cols: ["\u6D88\u606F\u961F\u5217\u79EF\u538B\u6D88\u8D39\u5EF6\u8FDF > 5 \u5206\u949F", "P2 \u9AD8", "\u5F85\u5904\u7406", "\u8D75\u96EA", "\u9700\u6838\u67E5\u4E0B\u6E38\u98CE\u63A7\u63A5\u53E3\u8D85\u65F6\u914D\u7F6E"]
+      cols: ["\u6D88\u606F\u961F\u5217\u79EF\u538B\u6D88\u8D39\u5EF6\u8FDF > 5 \u5206\u949F", "\u98CE\u63A7\u56DE\u8C03\u8D85\u65F6\u5BFC\u81F4\u6D88\u8D39\u8005\u7EBF\u7A0B\u963B\u585E", "\u4E2D\u95F4\u4EF6\u4E0E\u6570\u636E", "\u6D88\u606F\u961F\u5217", "\u6838\u67E5\u4E0B\u6E38\u98CE\u63A7\u63A5\u53E3\u8D85\u65F6\u914D\u7F6E\u5E76\u6269\u6D88\u8D39\u8005", sla(6.8), "\u8D75\u96EA", "\u4E2D\u95F4\u4EF6SRE\u7FA4"]
     },
     {
       id: `INC-${today}-05`,
       url: `https://itsm.company.internal/tickets/INC-${today}-05`,
-      cols: ["\u6D4B\u8BD5\u73AF\u5883 K8s Ingress \u8BC1\u4E66\u5373\u5C06\u5230\u671F", "P3 \u4E2D", "\u5F85\u786E\u8BA4", "\u9648\u6668", "\u5DF2\u7533\u8BF7\u81EA\u52A8\u7EED\u7B7E\uFF0C\u5F85\u9A8C\u8BC1\u751F\u6548\u72B6\u6001"]
+      cols: ["\u6D4B\u8BD5\u73AF\u5883 K8s Ingress \u8BC1\u4E66\u5373\u5C06\u5230\u671F", "\u57DF\u540D\u8BC1\u4E66\u5C06\u5728 3 \u4E2A\u5DE5\u4F5C\u65E5\u5185\u8FC7\u671F", "\u57FA\u7840\u67B6\u6784", "\u5BB9\u5668\u4E0E\u8BC1\u4E66", "\u5DF2\u7533\u8BF7\u81EA\u52A8\u7EED\u7B7E\uFF0C\u5F85\u9A8C\u8BC1\u751F\u6548\u72B6\u6001", sla(11), "\u9648\u6668", "\u4E91\u539F\u751F\u5E73\u53F0\u7FA4"]
     },
     {
       id: `INC-${today}-06`,
       url: `https://itsm.company.internal/tickets/INC-${today}-06`,
-      cols: ["\u8D22\u52A1\u5BF9\u8D26\u5B9A\u65F6\u4EFB\u52A1\u6628\u65E5\u91CD\u8BD5\u6210\u529F", "P3 \u4E2D", "\u89C2\u5BDF\u4E2D", "\u5F20\u4F1F", "\u8865\u8DD1\u4EFB\u52A1\u5B8C\u6210\uFF0C\u89C2\u5BDF\u4ECA\u665A\u96F6\u70B9\u6279\u6B21"]
+      cols: ["\u8D22\u52A1\u5BF9\u8D26\u5B9A\u65F6\u4EFB\u52A1\u6628\u65E5\u91CD\u8BD5\u6210\u529F", "\u591C\u95F4\u6279\u6B21\u77ED\u6682\u8D85\u65F6\u540E\u81EA\u52A8\u91CD\u8BD5\u5B8C\u6210", "\u53D1\u5E03\u4E0E\u8FD0\u7EF4", "\u5B9A\u65F6\u4EFB\u52A1\u8C03\u5EA6", "\u8865\u8DD1\u4EFB\u52A1\u5B8C\u6210\uFF0C\u7EE7\u7EED\u89C2\u5BDF\u4ECA\u665A\u6279\u6B21", sla(14.5), "\u5F20\u4F1F", "\u8D22\u52A1\u7CFB\u7EDF\u8FD0\u7EF4\u7FA4"]
     },
     {
       id: `INC-${today}-07`,
       url: null,
-      cols: ["\u5185\u90E8\u77E5\u8BC6\u5E93\u5168\u6587\u68C0\u7D22\u5076\u53D1\u5206\u8BCD\u504F\u5DEE", "P4 \u4F4E", "\u5F85\u5904\u7406", "\u674E\u654F", "\u672A\u9644\u5E26\u5916\u90E8\u5DE5\u5355\u94FE\u63A5\uFF0C\u4EC5\u5185\u90E8\u5206\u6790\u8BB0\u5F55"]
+      cols: ["\u5185\u90E8\u77E5\u8BC6\u5E93\u5168\u6587\u68C0\u7D22\u5076\u53D1\u5206\u8BCD\u504F\u5DEE", "\u4E13\u6709\u540D\u8BCD\u68C0\u7D22\u547D\u4E2D\u7387\u504F\u4F4E\uFF08\u65E0\u5916\u94FE\uFF09", "\u4E2D\u95F4\u4EF6\u4E0E\u6570\u636E", "\u7F13\u5B58\u4E0E\u68C0\u7D22", "\u51C6\u5907\u8865\u5145\u81EA\u5B9A\u4E49\u5206\u8BCD\u8BCD\u5178\u7070\u5EA6\u9A8C\u8BC1", sla(18), "\u674E\u654F", "\u77E5\u8BC6\u5E93\u7814\u53D1\u7FA4"]
     },
     {
       id: `INC-${today}-08`,
       url: `https://itsm.company.internal/tickets/INC-${today}-08`,
-      cols: ["OA \u5BA1\u6279\u9644\u4EF6\u9884\u89C8\u5076\u73B0\u6C34\u5370\u9519\u4F4D", "P3 \u4E2D", "\u5904\u7406\u4E2D", "\u738B\u5F3A", "\u524D\u7AEF\u5DF2\u590D\u73B0\uFF0C\u6B63\u5728\u8C03\u6574 PDF Canvas DPI \u7F29\u653E"]
+      cols: ["OA \u5BA1\u6279\u9644\u4EF6\u9884\u89C8\u5076\u73B0\u6C34\u5370\u9519\u4F4D", "\u9AD8\u5206\u5C4F\u6D4F\u89C8\u5668\u4E0B PDF \u6E32\u67D3\u6BD4\u4F8B\u504F\u79FB", "\u5E94\u7528\u7CFB\u7EDF", "OA\u4E0E\u5BA1\u6279\u6D41", "\u524D\u7AEF\u5DF2\u590D\u73B0\uFF0C\u6B63\u5728\u8C03\u6574 PDF Canvas DPI \u7F29\u653E", sla(7.4), "\u738B\u5F3A", "\u529E\u516C\u5E73\u53F0\u652F\u6301\u7FA4"]
     },
     {
       id: `INC-${today}-09`,
       url: `https://itsm.company.internal/tickets/INC-${today}-09`,
-      cols: ["\u5185\u7F51 GitLab Runner \u78C1\u76D8\u5269\u4F59\u4F4E\u4E8E 15%", "P2 \u9AD8", "\u5F85\u5904\u7406", "\u8D75\u96EA", "\u8BA1\u5212\u4ECA\u665A\u6E05\u7406\u8FC7\u671F\u6784\u5EFA\u7F13\u5B58\u955C\u50CF"]
+      cols: ["\u5185\u7F51 GitLab Runner \u78C1\u76D8\u5269\u4F59\u4F4E\u4E8E 15%", "\u6784\u5EFA\u673A\u955C\u50CF\u7F13\u5B58\u6301\u7EED\u589E\u957F\u89E6\u53D1\u9884\u8B66", "\u53D1\u5E03\u4E0E\u8FD0\u7EF4", "CI/CD\u6D41\u6C34\u7EBF", "\u8BA1\u5212\u4ECA\u665A\u6E05\u7406\u8FC7\u671F\u6784\u5EFA\u7F13\u5B58\u955C\u50CF", sla(2.6), "\u8D75\u96EA", "\u6548\u80FD\u5E73\u53F0\u8FD0\u7EF4\u7FA4"]
     },
     {
       id: `INC-${today}-10`,
       url: `https://itsm.company.internal/tickets/INC-${today}-10`,
-      cols: ["CDN \u9759\u6001\u8D44\u6E90\u56DE\u6E90\u8017\u65F6\u6CE2\u52A8", "P3 \u4E2D", "\u89C2\u5BDF\u4E2D", "\u9648\u6668", "\u5DF2\u5207\u6362\u5907\u7528\u56DE\u6E90\u8282\u70B9\uFF0C\u6307\u6807\u6062\u590D\u5E73\u7A33"]
+      cols: ["CDN \u9759\u6001\u8D44\u6E90\u56DE\u6E90\u8017\u65F6\u6CE2\u52A8", "\u534E\u4E1C\u8FB9\u7F18\u8282\u70B9\u56DE\u6E90\u5076\u53D1\u6296\u52A8", "\u53D1\u5E03\u4E0E\u8FD0\u7EF4", "CDN\u4E0E\u9759\u6001\u8D44\u6E90", "\u5DF2\u5207\u6362\u5907\u7528\u56DE\u6E90\u8282\u70B9\uFF0C\u6307\u6807\u6062\u590D\u5E73\u7A33", sla(12), "\u9648\u6668", "\u6838\u5FC3\u7F51\u7EDC\u4FDD\u969C\u7FA4"]
     },
     {
       id: `INC-${today}-11`,
       url: `https://itsm.company.internal/tickets/INC-${today}-11`,
-      cols: ["\u7B2C 11 \u6761\u5355\u636E\uFF08\u9A8C\u8BC1\u9762\u677F\u53EA\u52A0\u8F7D\u524D 10 \u6761\u4E14\u5199\u56DE\u4E0D\u4E22\u6B64\u884C\uFF09", "P4 \u4F4E", "\u5F85\u5904\u7406", "\u5907\u9009\u6C60", "\u672C\u884C\u4EC5\u7528\u4E8E\u4FDD\u7559\u6821\u9A8C"]
+      cols: ["\u7B2C 11 \u6761\u5355\u636E\uFF08\u9A8C\u8BC1\u9762\u677F\u53EA\u52A0\u8F7D\u524D 10 \u6761\u4E14\u5199\u56DE\u4E0D\u4E22\u6B64\u884C\uFF09", "\u672C\u884C\u4EC5\u7528\u4E8E\u4FDD\u7559\u6821\u9A8C", "\u57FA\u7840\u67B6\u6784", "\u670D\u52A1\u5668\u4E0E\u78C1\u76D8", "\u4FDD\u7559\u6821\u9A8C", sla(20), "\u5907\u9009\u6C60", "\u5907\u9009\u652F\u6301\u7FA4"]
     },
     {
       id: `INC-${today}-12`,
       url: `https://itsm.company.internal/tickets/INC-${today}-12`,
-      cols: ["\u7B2C 12 \u6761\u5355\u636E\uFF08\u9A8C\u8BC1\u65E0\u635F\u56DE\u5199\uFF09", "P4 \u4F4E", "\u5F85\u5904\u7406", "\u5907\u9009\u6C60", "\u4FDD\u7559\u539F\u59CB\u6570\u636E\u4E0E\u683C\u5F0F"]
+      cols: ["\u7B2C 12 \u6761\u5355\u636E\uFF08\u9A8C\u8BC1\u65E0\u635F\u56DE\u5199\uFF09", "\u4FDD\u7559\u539F\u59CB\u6570\u636E\u4E0E\u683C\u5F0F", "\u4E2D\u95F4\u4EF6\u4E0E\u6570\u636E", "\u6570\u636E\u5E93\u4E0ESQL", "\u4FDD\u7559\u6821\u9A8C", sla(24), "\u5907\u9009\u6C60", "\u5907\u9009\u652F\u6301\u7FA4"]
     }
   ];
   for (const item of sampleRows) {
@@ -72138,22 +72356,27 @@ async function createSampleWorkbook(excelPath, now = /* @__PURE__ */ new Date())
       cell.font = { color: { argb: "FF2563EB" }, underline: true };
     }
   }
+  applyCategoryDictionary(workbook, wsToday, 4, 5, 30);
   const wsPrev = workbook.addWorksheet(yesterday);
   wsPrev.addRow([...SAMPLE_HEADERS]);
-  wsPrev.addRow([`INC-${yesterday}-01`, "\u6628\u65E5\u5386\u53F2\u9057\u7559\u5355\u636E 1", "P2 \u9AD8", "\u5DF2\u5B8C\u6210", "\u5F20\u4F1F", "\u5DF2\u5F52\u6863"]);
-  wsPrev.addRow([`INC-${yesterday}-02`, "\u6628\u65E5\u5386\u53F2\u9057\u7559\u5355\u636E 2", "P3 \u4E2D", "\u5DF2\u5B8C\u6210", "\u674E\u654F", "\u5DF2\u5F52\u6863"]);
+  wsPrev.addRow([`INC-${yesterday}-01`, "\u6628\u65E5\u5386\u53F2\u9057\u7559\u5355\u636E 1", "\u5386\u53F2\u8BB0\u5F55\u5F52\u6863", "\u5E94\u7528\u7CFB\u7EDF", "OA\u4E0E\u5BA1\u6279\u6D41", "\u5DF2\u5F52\u6863", sla(10), "\u5F20\u4F1F", "\u529E\u516C\u5E73\u53F0\u652F\u6301\u7FA4"]);
+  wsPrev.addRow([`INC-${yesterday}-02`, "\u6628\u65E5\u5386\u53F2\u9057\u7559\u5355\u636E 2", "\u5386\u53F2\u8BB0\u5F55\u5F52\u6863", "\u57FA\u7840\u67B6\u6784", "\u7F51\u7EDC\u4E0E\u7F51\u5173", "\u5DF2\u5F52\u6863", sla(12), "\u674E\u654F", "\u6838\u5FC3\u7F51\u7EDC\u4FDD\u969C\u7FA4"]);
   await workbook.xlsx.writeFile(resolvedPath);
   return resolvedPath;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  CATEGORY_DICT_SHEET_NAMES,
   MAX_EDITABLE_COL,
   MAX_ROWS,
   MAX_SCAN_COLS,
   SAMPLE_HEADERS,
+  applyCategoryDictionary,
   checkWorkbookStatus,
   computeFileVersion,
+  computeWorkingHoursRemaining,
   createSampleWorkbook,
+  evaluateSla,
   formatCellValue,
   getTodayDateCandidates,
   getTodaySheetName,

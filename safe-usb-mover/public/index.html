@@ -723,7 +723,7 @@
           : upperTarget.startsWith(d.letter);
         const title = isMtp ? `📱 ${d.deviceName}` : `${d.letter} ${d.label || '未命名卷'}`;
         const badgeCls = isMtp ? 'mtp' : (isRem ? '' : 'local');
-        const badgeText = isMtp ? 'MTP 手机' : (isRem ? '可移动' : '磁盘');
+        const badgeText = isMtp ? (d.busy ? 'MTP 传输中' : 'MTP 手机') : (isRem ? '可移动' : '磁盘');
         const barColor = usedPct > 90 ? '#ef4444' : isMtp ? '#06b6d4' : isRem ? '#10b981' : '#3b82f6';
         return `
           <button type="button" class="drive-chip ${selected ? 'selected' : ''} ${isMtp ? 'mtp' : (isRem ? 'removable' : '')}" onclick="selectDrive(drivesCache[${idx}])">
@@ -812,10 +812,13 @@
         document.getElementById('progressFill').style.width = (cf.percent || 0) + '%';
         document.getElementById('currentFilePercent').textContent = (cf.percent || 0) + '%';
         const bytesShown = cf.phase === 'verifying' ? cf.verifiedBytes : cf.copiedBytes;
-        document.getElementById('currentFileBytes').textContent =
-          (cf.phase === 'verifying' ? '已校验 ' : '已写入 ') + fmtBytes(bytesShown) + ' / ' + fmtBytes(cf.size);
-        document.getElementById('liveSpeed').textContent =
-          cf.phase === 'copying'
+        const isMtpPendingSize = cf.transport === 'mtp' && cf.phase === 'copying' && !bytesShown;
+        document.getElementById('currentFileBytes').textContent = isMtpPendingSize
+          ? 'MTP 传输中（写完后一次性校验字节） · 共 ' + fmtBytes(cf.size)
+          : (cf.phase === 'verifying' ? '已校验 ' : '已写入 ') + fmtBytes(bytesShown) + ' / ' + fmtBytes(cf.size);
+        document.getElementById('liveSpeed').textContent = isMtpPendingSize
+          ? (cf.elapsedSec ? `MTP 写入中 · ${cf.elapsedSec}s` : 'MTP 写入中...')
+          : cf.phase === 'copying'
             ? (cf.speedMBs ? `${cf.speedMBs} MB/s` : '传输中...')
             : cf.phase === 'verifying'
               ? '完整性校验中'

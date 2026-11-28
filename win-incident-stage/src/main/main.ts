@@ -28,6 +28,9 @@ import type {
 import {
   ConfigStore,
   DesktopPrefsStore,
+  sanitizeMusicSource,
+  sanitizeMusicVolume,
+  sanitizeMusicWebUrl,
   sanitizeTodoInterval,
   sanitizeTodos,
   sanitizeTrafficLights,
@@ -37,9 +40,12 @@ import type * as ExcelStoreModule from './excel-store.ts'
 import { InputMonitor } from './input-monitor.ts'
 import { LocalMusicStore } from './local-music.ts'
 import { MediaMonitor } from './media-monitor.ts'
-import { sendHotkeyCombo } from './win32-bridge.ts'
+import { WebMusicManager } from './web-music.ts'
+import { sendHotkeyCombo, sendVolumeKey } from './win32-bridge.ts'
 
 const OVERLAY_WINDOW_WIDTH = 680
+
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -78,6 +84,22 @@ let tray: Tray | null = null
 let storedPrefs: StoredDesktopPrefs = prefsStore.read()
 let lastInteractive: boolean | null = null
 
+const webMusic = new WebMusicManager(appRoot, {
+  getHomeUrl: () => storedPrefs.musicWebUrl,
+  getVolume: () => storedPrefs.musicVolume,
+  onHomeUrlChange: (url, switchToWebMode) => {
+    updatePrefs({
+      musicWebUrl: url,
+      ...(switchToWebMode ? { musicSource: 'web' } : {}),
+    })
+  },
+  onStateChange: (webState) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('stage:web-music-state', webState)
+    }
+  },
+})
+
 localMusicStore.loadFolder(storedPrefs.musicFolder)
 
 function resolveTheme(prefs: StoredDesktopPrefs): 'light' | 'dark' {
@@ -107,7 +129,10 @@ function broadcastLocalMusic(): void {
 function syncWidgetsRuntime(): void {
   const active = !isSmokeTest && !storedPrefs.hidden
   inputMonitor.setEnabled(active && storedPrefs.showCat)
-  mediaMonitor.setEnabled(active && storedPrefs.showPlayer && storedPrefs.musicFolder.trim() === '')
+  mediaMonitor.setEnabled(active && storedPrefs.showPlayer && storedPrefs.musicSource === 'smtc')
+  if (!storedPrefs.showPlayer || storedPrefs.musicSource !== 'web') {
+    webMusic.destroy()
+  }
 }
 
 function resolveTargetDisplay(): Display {
@@ -143,12 +168,17 @@ function setMousePassThrough(win: BrowserWindow, interactive: boolean): void {
 
 function updatePrefs(patch: Partial<StoredDesktopPrefs>): DesktopPreferences {
   const prevMusicFolder = storedPrefs.musicFolder
+  const prevVolume = storedPrefs.musicVolume
   storedPrefs = { ...storedPrefs, ...patch }
   prefsStore.write(storedPrefs)
 
   if (storedPrefs.musicFolder !== prevMusicFolder) {
     localMusicStore.loadFolder(storedPrefs.musicFolder)
     broadcastLocalMusic()
+  }
+
+  if (storedPrefs.musicVolume !== prevVolume) {
+    void webMusic.setVolume(storedPrefs.musicVolume)
   }
 
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -180,7 +210,7 @@ async function pickMusicFolder() {
   })
   if (result.canceled || result.filePaths.length === 0) return null
   const pickedFolder = result.filePaths[0]
-  updatePrefs({ musicFolder: pickedFolder })
+  updatePrefs({ musicFolder: pickedFolder, musicSource: 'local' })
   return localMusicStore.getLibrary()
 }
 
@@ -237,6 +267,13 @@ function rebuildTrayMenu(): void {
       type: 'checkbox',
       checked: storedPrefs.showPlayer,
       click: () => updatePrefs({ showPlayer: !storedPrefs.showPlayer }),
+    },
+    {
+      label: '打开网页音乐窗口（登录/选歌）',
+      click: () => {
+        updatePrefs({ showPlayer: true, musicSource: 'web' })
+        void webMusic.openWindow(storedPrefs.musicWebUrl || undefined, !storedPrefs.musicWebUrl)
+      },
     },
     {
       label: '选择本地音乐播放文件夹...',
@@ -390,6 +427,9 @@ function createWindow(): void {
           typeof prefsRes?.showCat !== 'boolean' ||
           typeof prefsRes?.showPlayer !== 'boolean' ||
           typeof prefsRes?.musicFolder !== 'string' ||
+          (prefsRes?.musicSource !== 'smtc' && prefsRes?.musicSource !== 'local' && prefsRes?.musicSource !== 'web') ||
+          typeof prefsRes?.musicWebUrl !== 'string' ||
+          typeof prefsRes?.musicVolume !== 'number' ||
           !Array.isArray(prefsRes?.trafficLights) ||
           prefsRes.trafficLights.length !== 3 ||
           typeof musicRes?.folderPath !== 'string'
@@ -397,7 +437,7 @@ function createWindow(): void {
           throw new Error('DesktopPreferences missing new widget fields')
         }
         console.log(
-          `ELECTRON_SMOKE_OK rows=${loadRes?.rows?.length ?? -1} activeSheet=${loadRes?.activeSheet ?? 'null'} showCat=${prefsRes.showCat} showPlayer=${prefsRes.showPlayer} lights=${prefsRes.trafficLights.length}`,
+          `ELECTRON_SMOKE_OK rows=${loadRes?.rows?.length ?? -1} activeSheet=${loadRes?.activeSheet ?? 'null'} showCat=${prefsRes.showCat} showPlayer=${prefsRes.showPlayer} musicSource=${prefsRes.musicSource} vol=${prefsRes.musicVolume}`,
         )
         app.exit(0)
       } catch (err) {
@@ -433,6 +473,15 @@ function registerIpcHandlers(): void {
     if (typeof patch.showPlayer === 'boolean') cleanPatch.showPlayer = patch.showPlayer
     if (typeof patch.musicFolder === 'string') {
       cleanPatch.musicFolder = patch.musicFolder.trim().slice(0, 512)
+    }
+    if (patch.musicSource !== undefined) {
+      cleanPatch.musicSource = sanitizeMusicSource(patch.musicSource, cleanPatch.musicFolder ?? storedPrefs.musicFolder)
+    }
+    if (typeof patch.musicWebUrl === 'string') {
+      cleanPatch.musicWebUrl = sanitizeMusicWebUrl(patch.musicWebUrl)
+    }
+    if (typeof patch.musicVolume === 'number') {
+      cleanPatch.musicVolume = sanitizeMusicVolume(patch.musicVolume)
     }
     if (Array.isArray(patch.trafficLights)) {
       cleanPatch.trafficLights = sanitizeTrafficLights(patch.trafficLights)
@@ -514,40 +563,145 @@ function registerIpcHandlers(): void {
   ipcMain.handle('stage:open-music-folder', () => openMusicFolder())
 
   ipcMain.handle('stage:music-context-menu', async () => {
-    if (!storedPrefs.musicFolder.trim()) {
-      await pickMusicFolder()
-      return
-    }
     if (!mainWindow || mainWindow.isDestroyed()) return
+    const hasLocalFolder = storedPrefs.musicFolder.trim() !== ''
+    const hasWebTarget = storedPrefs.musicWebUrl.trim() !== ''
     const menu = Menu.buildFromTemplate([
       {
-        label: '打开播放文件夹',
+        label: '🌐 打开网页音乐窗口（登录 / 选歌）',
         click: () => {
-          void openMusicFolder()
+          updatePrefs({ musicSource: 'web' })
+          void webMusic.openWindow(storedPrefs.musicWebUrl || undefined, !storedPrefs.musicWebUrl)
         },
       },
       {
-        label: '更换播放文件夹...',
+        label: '🔗 更换音乐网站地址...',
         click: () => {
-          void pickMusicFolder()
-        },
-      },
-      {
-        label: '刷新曲目列表',
-        click: () => {
-          localMusicStore.loadFolder(storedPrefs.musicFolder)
-          broadcastLocalMusic()
+          updatePrefs({ musicSource: 'web' })
+          void webMusic.openStartPage()
         },
       },
       { type: 'separator' },
       {
-        label: '切换回系统媒体模式 (SMTC)',
+        label: '📂 选择本地音乐文件夹...',
         click: () => {
-          updatePrefs({ musicFolder: '' })
+          void pickMusicFolder()
         },
       },
+      ...(hasLocalFolder
+        ? [
+            {
+              label: '打开当前本地文件夹',
+              click: () => {
+                void openMusicFolder()
+              },
+            },
+            {
+              label: '刷新本地曲目列表',
+              click: () => {
+                localMusicStore.loadFolder(storedPrefs.musicFolder)
+                broadcastLocalMusic()
+              },
+            },
+          ]
+        : []),
+      { type: 'separator' },
+      {
+        label: '音乐播放源',
+        submenu: [
+          {
+            label: '网页音乐网站（球内登录）',
+            type: 'radio',
+            checked: storedPrefs.musicSource === 'web',
+            click: () => {
+              updatePrefs({ musicSource: 'web' })
+              if (!storedPrefs.musicWebUrl) {
+                void webMusic.openStartPage()
+              }
+            },
+          },
+          {
+            label: '本地音乐文件夹',
+            type: 'radio',
+            checked: storedPrefs.musicSource === 'local',
+            click: () => {
+              if (!hasLocalFolder) {
+                void pickMusicFolder()
+              } else {
+                updatePrefs({ musicSource: 'local' })
+              }
+            },
+          },
+          {
+            label: '系统媒体控制 (SMTC)',
+            type: 'radio',
+            checked: storedPrefs.musicSource === 'smtc',
+            click: () => {
+              updatePrefs({ musicSource: 'smtc' })
+            },
+          },
+        ],
+      },
+      ...(storedPrefs.musicSource === 'web' || hasWebTarget
+        ? [
+            { type: 'separator' as const },
+            {
+              label: '🧹 清除网页音乐登录缓存',
+              click: () => {
+                void webMusic.clearSession()
+              },
+            },
+          ]
+        : []),
     ])
     menu.popup({ window: mainWindow })
+  })
+
+  ipcMain.handle('stage:adjust-system-volume', (_event, direction: 'up' | 'down', steps?: number) => {
+    if (direction !== 'up' && direction !== 'down') return false
+    return sendVolumeKey(direction, typeof steps === 'number' ? steps : 2)
+  })
+
+  ipcMain.handle('stage:set-music-volume', (_event, rawVolume: number) => {
+    const clean = sanitizeMusicVolume(rawVolume)
+    updatePrefs({ musicVolume: clean })
+    void webMusic.setVolume(clean)
+    return clean
+  })
+
+  ipcMain.handle('stage:get-web-music-state', () => webMusic.getState())
+
+  ipcMain.handle('stage:web-music-control', async (_event, action: 'prev' | 'next' | 'toggle') => {
+    if (action !== 'prev' && action !== 'next' && action !== 'toggle') return false
+    return webMusic.control(action)
+  })
+
+  ipcMain.handle('stage:open-web-music', async (_event, rawUrl?: string) => {
+    const safeUrl = sanitizeMusicWebUrl(rawUrl)
+    if (safeUrl) {
+      updatePrefs({ musicSource: 'web', musicWebUrl: safeUrl })
+      return webMusic.openWindow(safeUrl, false)
+    }
+    updatePrefs({ musicSource: 'web' })
+    const home = sanitizeMusicWebUrl(storedPrefs.musicWebUrl)
+    return webMusic.openWindow(home || undefined, !home)
+  })
+
+  ipcMain.handle('stage:hide-web-music', () => {
+    webMusic.hideWindow()
+  })
+
+  ipcMain.handle('stage:clear-web-music-session', () => webMusic.clearSession())
+
+  ipcMain.handle('stage:web-music-start-get-url', () => storedPrefs.musicWebUrl)
+
+  ipcMain.handle('stage:web-music-start-open-url', async (_event, rawUrl: string) => {
+    const safe = sanitizeMusicWebUrl(rawUrl)
+    if (!safe) {
+      return { ok: false, error: '请输入有效的 http:// 或 https:// 音乐网站地址' }
+    }
+    await webMusic.openWindow(safe, false)
+    return { ok: true }
   })
 
   ipcMain.handle('stage:api', async (_event, endpoint: string, payload: unknown) => {
@@ -693,8 +847,13 @@ app.on('second-instance', () => {
   }
 })
 
+app.on('before-quit', () => {
+  webMusic.setQuitting()
+})
+
 app.on('will-quit', () => {
   inputMonitor.stop()
   mediaMonitor.stop()
+  webMusic.destroy()
   globalShortcut.unregisterAll()
 })

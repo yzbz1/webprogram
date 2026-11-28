@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';" />
+  <title>球体网页音乐中心</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      background:
+        radial-gradient(circle at 20% 20%, rgba(245, 158, 11, 0.16), transparent 42%),
+        radial-gradient(circle at 80% 30%, rgba(56, 189, 248, 0.16), transparent 45%),
+        #0b1120;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 560px;
+      padding: 28px;
+      border-radius: 20px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      background: rgba(15, 23, 42, 0.84);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+    }
+    h1 { margin: 0 0 8px; font-size: 20px; font-weight: 700; }
+    p { margin: 0 0 18px; font-size: 13px; line-height: 1.6; color: #94a3b8; }
+    .row { display: flex; gap: 10px; margin-bottom: 12px; }
+    input {
+      flex: 1;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.32);
+      background: rgba(2, 6, 23, 0.65);
+      color: #f8fafc;
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus { border-color: #38bdf8; }
+    button {
+      height: 40px;
+      padding: 0 16px;
+      border-radius: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      background: rgba(30, 41, 59, 0.9);
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary {
+      border-color: transparent;
+      background: linear-gradient(135deg, #0284c7, #0ea5e9);
+    }
+    button:hover { filter: brightness(1.08); }
+    .hint {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(30, 41, 59, 0.55);
+      font-size: 12px;
+      line-height: 1.65;
+      color: #cbd5e1;
+    }
+    .foot {
+      margin-top: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .err { min-height: 18px; font-size: 12px; color: #fda4af; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>网页音乐网站（球内独立登录 · 持久化保存）</h1>
+    <p>输入任意可在线听歌的网站地址并登录账号；点窗口右上角关闭「×」后会隐藏到桌面悬浮球后台继续播放，登录状态自动保留。</p>
+    <div class="row">
+      <input id="urlInput" type="text" placeholder="例如 https://music.163.com 或你的私人音乐站地址" />
+      <button id="goBtn" class="primary" type="button">进入并登录</button>
+    </div>
+    <div id="errBox" class="err"></div>
+    <div class="hint">
+      • 支持任意 Web 音乐站（云音乐、QQ音乐、YouTube Music、Spotify、自建 Navidrome/Jellyfin 等）<br/>
+      • 回到桌面后：鼠标放球上<strong>上下滚轮</strong>即可调音量并同步升降液态水位；左键播放/暂停，两侧上一首/下一首
+    </div>
+    <div class="foot">
+      <span id="statusText">会话空间：persist:stage-web-music</span>
+      <button id="clearBtn" type="button">清除已保存登录</button>
+    </div>
+  </div>
+  <script>
+    const input = document.getElementById('urlInput');
+    const goBtn = document.getElementById('goBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const errBox = document.getElementById('errBox');
+    const statusText = document.getElementById('statusText');
+
+    async function boot() {
+      if (!window.stageWebMusicSetup) return;
+      const saved = await window.stageWebMusicSetup.getHomeUrl();
+      if (saved) input.value = saved;
+      input.focus();
+    }
+
+    async function submitUrl() {
+      errBox.textContent = '';
+      if (!window.stageWebMusicSetup) return;
+      const res = await window.stageWebMusicSetup.openUrl(input.value);
+      if (!res.ok) {
+        errBox.textContent = res.error || '无法打开该网址';
+      }
+    }
+
+    goBtn.addEventListener('click', () => { void submitUrl(); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') void submitUrl();
+    });
+    clearBtn.addEventListener('click', async () => {
+      if (!window.stageWebMusicSetup) return;
+      const ok = await window.stageWebMusicSetup.clearSession();
+      statusText.textContent = ok ? '已清除网页音乐 Cookie 与缓存' : '清除失败';
+    });
+    void boot();
+  </script>
+</body>
+</html>

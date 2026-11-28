@@ -18,6 +18,7 @@ export interface DrawerSnapshot {
   readonly rows: readonly IncidentRow[]
   readonly version: string | null
   readonly totalDataRows: number
+  readonly categoryOptions?: Readonly<Record<string, readonly string[]>>
   readonly error?: string
 }
 
@@ -109,6 +110,7 @@ export type InputActivityEvent =
   | { readonly type: 'mouse'; readonly nx: number; readonly ny: number }
 
 export type MediaPlaybackStatus = 'playing' | 'paused' | 'idle'
+export type MusicSourceMode = 'smtc' | 'local' | 'web'
 
 export interface MediaState {
   readonly available: boolean
@@ -142,7 +144,10 @@ export interface DesktopPreferences {
   readonly stageWidth: number
   readonly showCat: boolean
   readonly showPlayer: boolean
+  readonly musicSource: MusicSourceMode
   readonly musicFolder: string
+  readonly musicWebUrl: string
+  readonly musicVolume: number
   readonly trafficLights: readonly TrafficLightShortcut[]
   readonly todos: readonly TodoItem[]
   readonly todoIntervalMinutes: number
@@ -171,6 +176,14 @@ export interface StageApi {
   pickMusicFolder(): Promise<LocalMusicLibrary | null>
   openMusicFolder(): Promise<boolean>
   showMusicContextMenu(): Promise<void>
+  adjustSystemVolume(direction: 'up' | 'down', steps?: number): Promise<boolean>
+  setMusicVolume(volume: number): Promise<number>
+  getWebMusicState(): Promise<MediaState>
+  onWebMusicState(cb: (state: MediaState) => void): () => void
+  webMusicControl(action: 'prev' | 'next' | 'toggle'): Promise<boolean>
+  openWebMusicWindow(url?: string): Promise<boolean>
+  hideWebMusicWindow(): Promise<void>
+  clearWebMusicSession(): Promise<boolean>
 }
 
 declare global {

@@ -7297,6 +7297,102 @@
   // src/extension/IncidentDrawer.tsx
   var import_react = __toESM(require_react(), 1);
 
+  // src/shared/sla.ts
+  var DEFAULT_SERVICE_CATEGORIES = {
+    \u57FA\u7840\u67B6\u6784: ["\u7F51\u7EDC\u4E0E\u7F51\u5173", "\u670D\u52A1\u5668\u4E0E\u78C1\u76D8", "\u5BB9\u5668\u4E0E\u8BC1\u4E66"],
+    \u5E94\u7528\u7CFB\u7EDF: ["\u5355\u70B9\u767B\u5F55\u4E0E\u8BA4\u8BC1", "OA\u4E0E\u5BA1\u6279\u6D41", "\u8D22\u52A1\u4E0E\u62A5\u8868"],
+    \u4E2D\u95F4\u4EF6\u4E0E\u6570\u636E: ["\u6D88\u606F\u961F\u5217", "\u6570\u636E\u5E93\u4E0ESQL", "\u7F13\u5B58\u4E0E\u68C0\u7D22"],
+    \u53D1\u5E03\u4E0E\u8FD0\u7EF4: ["CI/CD\u6D41\u6C34\u7EBF", "CDN\u4E0E\u9759\u6001\u8D44\u6E90", "\u5B9A\u65F6\u4EFB\u52A1\u8C03\u5EA6"]
+  };
+  var WORK_START_MIN = 8 * 60 + 30;
+  var WORK_END_MIN = 18 * 60;
+  var MS_PER_MIN = 6e4;
+  var MS_PER_HOUR = 36e5;
+  function isServiceCategoryHeader(header) {
+    const h = header.trim();
+    return h.includes("\u670D\u52A1\u5206\u7C7B") && !h.includes("\u5B50\u5206\u7C7B");
+  }
+  function isServiceSubCategoryHeader(header) {
+    const h = header.trim();
+    return h.includes("\u670D\u52A1\u5B50\u5206\u7C7B") || h.includes("\u5B50\u5206\u7C7B");
+  }
+  function isSlaHeader(header) {
+    return /sla|到期时间/i.test(header.trim());
+  }
+  function parseLocalDateTime(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    const match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/.exec(
+      trimmed
+    );
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = match[4] !== void 0 ? Number(match[4]) : 18;
+    const minute = match[5] !== void 0 ? Number(match[5]) : 0;
+    const second = match[6] !== void 0 ? Number(match[6]) : 0;
+    if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+      return null;
+    }
+    const d = new Date(year, month - 1, day, hour, minute, second, 0);
+    if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) {
+      return null;
+    }
+    return d;
+  }
+  function sumWorkingMsBetween(startMs, endMs) {
+    if (endMs <= startMs) return 0;
+    const cursor = new Date(startMs);
+    cursor.setHours(0, 0, 0, 0);
+    let totalMs = 0;
+    for (let days = 0; days < 366; days += 1) {
+      const dayStartMs = cursor.getTime();
+      if (dayStartMs >= endMs) break;
+      const dow = cursor.getDay();
+      if (dow >= 1 && dow <= 5) {
+        const workStart = dayStartMs + WORK_START_MIN * MS_PER_MIN;
+        const workEnd = dayStartMs + WORK_END_MIN * MS_PER_MIN;
+        const overlapStart = Math.max(startMs, workStart);
+        const overlapEnd = Math.min(endMs, workEnd);
+        if (overlapEnd > overlapStart) {
+          totalMs += overlapEnd - overlapStart;
+        }
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return totalMs;
+  }
+  function computeWorkingHoursRemaining(deadline, now = /* @__PURE__ */ new Date()) {
+    const startMs = now.getTime();
+    const endMs = deadline.getTime();
+    if (endMs === startMs) return 0;
+    if (endMs > startMs) {
+      return sumWorkingMsBetween(startMs, endMs) / MS_PER_HOUR;
+    }
+    return -(sumWorkingMsBetween(endMs, startMs) / MS_PER_HOUR);
+  }
+  function evaluateSla(rawValue, now = /* @__PURE__ */ new Date()) {
+    const deadline = parseLocalDateTime(rawValue);
+    if (!deadline) return null;
+    const remainingHours = computeWorkingHoursRemaining(deadline, now);
+    const tone = remainingHours < 4 ? "err" : remainingHours <= 8 ? "warn" : "ok";
+    let label;
+    let shortLabel;
+    if (deadline.getTime() <= now.getTime()) {
+      label = "\u5DF2\u8D85\u65F6";
+      shortLabel = "\u8D85\u65F6";
+    } else if (remainingHours < 0.1) {
+      label = "\u5373\u5C06\u5230\u671F";
+      shortLabel = "0.1h";
+    } else {
+      const rounded = remainingHours.toFixed(1);
+      label = `\u5DE5\u4F5C\u5269\u4F59 ${rounded}h`;
+      shortLabel = `${rounded}h`;
+    }
+    return { deadline, remainingHours, tone, label, shortLabel };
+  }
+
   // src/extension/icons.tsx
   var import_jsx_runtime = __toESM(require_jsx_runtime(), 1);
   function RefreshIcon({ spinning = false }) {
@@ -7541,6 +7637,7 @@
     const [hoveredRow, setHoveredRow] = (0, import_react.useState)(null);
     const [expandedWidth, setExpandedWidth] = (0, import_react.useState)(readFallbackWidth);
     const [resizing, setResizing] = (0, import_react.useState)(false);
+    const [nowTick, setNowTick] = (0, import_react.useState)(() => Date.now());
     const [drafts, setDrafts] = (0, import_react.useState)({});
     const [fieldStatus, setFieldStatus] = (0, import_react.useState)({});
     const [fieldErrors, setFieldErrors] = (0, import_react.useState)({});
@@ -7566,6 +7663,33 @@
     const hasDirty = dirtyEdits.length > 0;
     const hasSaving = Object.values(fieldStatus).some((s) => s === "saving");
     const hasFieldError = Object.values(fieldStatus).some((s) => s === "error");
+    const categoryOptions = snapshot?.categoryOptions ?? DEFAULT_SERVICE_CATEGORIES;
+    const slaColOffset = (0, import_react.useMemo)(() => {
+      const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isSlaHeader(h));
+      return idx > 0 ? idx - 1 : -1;
+    }, [snapshot?.headers]);
+    const categoryColOffset = (0, import_react.useMemo)(() => {
+      const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isServiceCategoryHeader(h));
+      return idx > 0 ? idx - 1 : -1;
+    }, [snapshot?.headers]);
+    const subCategoryColOffset = (0, import_react.useMemo)(() => {
+      const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isServiceSubCategoryHeader(h));
+      return idx > 0 ? idx - 1 : -1;
+    }, [snapshot?.headers]);
+    const nowDate = (0, import_react.useMemo)(() => new Date(nowTick), [nowTick]);
+    (0, import_react.useEffect)(() => {
+      const timer = window.setInterval(() => setNowTick(Date.now()), 6e4);
+      return () => window.clearInterval(timer);
+    }, []);
+    const getCellDisplayValue = (0, import_react.useCallback)((row, colOffset) => {
+      if (colOffset < 0 || colOffset >= row.cells.length) return "";
+      const k = cellKey(row.rowNumber, colOffset + 2);
+      return Object.hasOwn(drafts, k) ? drafts[k] : row.cells[colOffset] ?? "";
+    }, [drafts]);
+    const getRowSla = (0, import_react.useCallback)((row) => {
+      if (slaColOffset < 0) return null;
+      return evaluateSla(getCellDisplayValue(row, slaColOffset), nowDate);
+    }, [getCellDisplayValue, nowDate, slaColOffset]);
     (0, import_react.useEffect)(() => {
       try {
         void chrome.storage.local.get(["drawerWidth", "drawerHidden"]).then((res) => {
@@ -7883,6 +8007,80 @@
         }
       });
     }, [apiCall, enqueueSave, markFieldSaved, triggerGlobalSavedPulse]);
+    const saveEditsBatch = (0, import_react.useCallback)((edits) => {
+      if (edits.length === 0) return Promise.resolve(true);
+      if (edits.length === 1) {
+        return saveCell(edits[0].rowNumber, edits[0].colIndex, edits[0].value, false);
+      }
+      return enqueueSave(async () => {
+        const snap = snapshotRef.current;
+        if (!snap || !snap.activeSheet) return false;
+        if (conflictRef.current) return false;
+        setFieldStatus((prev) => {
+          const next = { ...prev };
+          for (const edit of edits) next[cellKey(edit.rowNumber, edit.colIndex)] = "saving";
+          return next;
+        });
+        try {
+          const res = await apiCall("save-batch", {
+            sheetName: snap.activeSheet,
+            edits,
+            expectedVersion: versionRef.current,
+            forceOverwrite: false
+          });
+          if (res.saved) {
+            versionRef.current = res.version;
+            const editMap = new Map(edits.map((e) => [cellKey(e.rowNumber, e.colIndex), e.value]));
+            setSnapshot((prev) => {
+              if (!prev) return prev;
+              const updatedRows = prev.rows.map((r) => {
+                const nextCells = [...r.cells];
+                let touched = false;
+                for (let c = 0; c < r.cells.length; c += 1) {
+                  const v = editMap.get(cellKey(r.rowNumber, c + 2));
+                  if (v !== void 0) {
+                    nextCells[c] = v;
+                    touched = true;
+                  }
+                }
+                return touched ? { ...r, cells: nextCells } : r;
+              });
+              return { ...prev, rows: updatedRows, version: res.version };
+            });
+            setDrafts((prev) => {
+              const copy = { ...prev };
+              for (const edit of edits) {
+                const k = cellKey(edit.rowNumber, edit.colIndex);
+                if (copy[k] === edit.value) delete copy[k];
+              }
+              return copy;
+            });
+            for (const edit of edits) markFieldSaved(cellKey(edit.rowNumber, edit.colIndex));
+            setStale(false);
+            setConflict(false);
+            setBannerError(null);
+            triggerGlobalSavedPulse();
+            return true;
+          }
+          if (res.conflict) {
+            setStale(true);
+            setConflict(true);
+          }
+          setFieldStatus((prev) => {
+            const next = { ...prev };
+            for (const edit of edits) next[cellKey(edit.rowNumber, edit.colIndex)] = "error";
+            return next;
+          });
+          return false;
+        } catch (err) {
+          if (err instanceof BridgeOfflineError) {
+            setBridgeOffline(true);
+          }
+          setBannerError(err instanceof Error ? err.message : "\u4FDD\u5B58\u5931\u8D25");
+          return false;
+        }
+      });
+    }, [apiCall, enqueueSave, markFieldSaved, saveCell, triggerGlobalSavedPulse]);
     const handleRefreshClick = (0, import_react.useCallback)(() => {
       if (hasDirty && !stale) {
         setConfirmRefresh(true);
@@ -8345,11 +8543,12 @@
           const isExpanded = expandedRow === row.rowNumber;
           const isHovered = !isExpanded && hoveredRow === row.rowNumber;
           const cardState = isExpanded ? "expanded" : isHovered ? "hover" : "collapsed";
-          const tone = getStatusTone(row);
+          const rowSla = getRowSla(row);
           const rowHasDirty = row.cells.some((cellVal, colOffset) => {
             const k = cellKey(row.rowNumber, colOffset + 2);
             return Object.hasOwn(drafts, k) && drafts[k] !== cellVal;
           });
+          const dotTone = rowSla ? rowSla.tone : rowHasDirty ? "accent" : getStatusTone(row);
           return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
             "div",
             {
@@ -8376,17 +8575,20 @@
                   {
                     className: "idw-card-head",
                     onClick: () => handleToggleExpand(row.rowNumber),
-                    title: cardState === "collapsed" ? row.idText : void 0,
+                    title: cardState === "collapsed" ? rowSla ? `${row.idText}
+SLA: ${rowSla.label}` : row.idText : void 0,
                     children: [
                       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
                         "span",
                         {
                           className: "idw-dot",
-                          "data-tone": rowHasDirty ? "accent" : tone
+                          "data-tone": dotTone,
+                          title: rowSla ? `SLA: ${rowSla.label}` : void 0
                         }
                       ),
                       cardState === "collapsed" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-id-short", children: shortenTicketId(row.idText) }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-id-full", title: row.idText, children: row.idText }),
                       isHovered && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "idw-hover-hint", children: [
+                        rowSla && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-mini-sla", "data-tone": rowSla.tone, children: rowSla.shortLabel }),
                         row.hyperlink && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(ExternalLinkIcon, {}),
                         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(ChevronDownIcon, {})
                       ] }),
@@ -8410,64 +8612,150 @@
                     ]
                   }
                 ),
-                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "idw-accordion", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "idw-accordion-inner", children: isExpanded && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "idw-form", children: row.cells.map((cellValue, colOffset) => {
-                  const colIndex = colOffset + 2;
-                  const key = cellKey(row.rowNumber, colIndex);
-                  const headerName = snapshot?.headers[colIndex - 1] ?? `\u5217 ${colIndex}`;
-                  const value = Object.hasOwn(drafts, key) ? drafts[key] : cellValue;
-                  const status = fieldStatus[key];
-                  const errText = fieldErrors[key];
-                  const flash = status === "saved" || status === "error" ? status : void 0;
-                  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field", children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field-head", children: [
-                      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-label", title: headerName, children: headerName }),
-                      status === "saving" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-state", "data-state": "saving", children: "\u4FDD\u5B58\u4E2D..." }),
-                      status === "saved" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-state", "data-state": "saved", children: "\u5DF2\u4FDD\u5B58" })
-                    ] }),
-                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-                      AutoTextarea,
-                      {
-                        ariaLabel: headerName,
-                        value,
-                        flash,
-                        placeholder: `\u8F93\u5165${headerName}...`,
-                        onChange: (nextVal) => {
-                          setDrafts((prev) => ({ ...prev, [key]: nextVal }));
-                          if (fieldStatus[key] === "error") {
-                            setFieldStatus((prev) => {
-                              const copy = { ...prev };
-                              delete copy[key];
-                              return copy;
-                            });
-                          }
-                        },
-                        onBlur: (currentVal) => {
-                          void saveCell(row.rowNumber, colIndex, currentVal, false);
-                        },
-                        onKeyDown: (e) => {
-                          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-                            e.preventDefault();
-                            void saveCell(row.rowNumber, colIndex, e.currentTarget.value, false);
-                          } else if (e.key === "Escape") {
-                            e.currentTarget.blur();
-                          }
-                        }
-                      }
-                    ),
-                    errText && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field-error", children: [
-                      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: errText }),
-                      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-                        "button",
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "idw-accordion", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "idw-accordion-inner", children: isExpanded && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "idw-form", children: (() => {
+                  const hasCategoryPair = categoryColOffset >= 0 && subCategoryColOffset >= 0;
+                  const firstCategoryOffset = hasCategoryPair ? Math.min(categoryColOffset, subCategoryColOffset) : -1;
+                  const secondCategoryOffset = hasCategoryPair ? Math.max(categoryColOffset, subCategoryColOffset) : -1;
+                  const renderCategoryDropdown = (offset, isParent) => {
+                    const colIndex = offset + 2;
+                    const key = cellKey(row.rowNumber, colIndex);
+                    const headerName = snapshot?.headers[colIndex - 1] ?? (isParent ? "\u670D\u52A1\u5206\u7C7B" : "\u670D\u52A1\u5B50\u5206\u7C7B");
+                    const value = getCellDisplayValue(row, offset);
+                    const status = fieldStatus[key];
+                    const errText = fieldErrors[key];
+                    const flash = status === "saved" || status === "error" ? status : void 0;
+                    const parentValue = categoryColOffset >= 0 ? getCellDisplayValue(row, categoryColOffset).trim() : "";
+                    const baseOptions = isParent ? Object.keys(categoryOptions) : parentValue ? categoryOptions[parentValue] ?? [] : [];
+                    const optionList = value.trim() !== "" && !baseOptions.includes(value.trim()) ? [value.trim(), ...baseOptions] : baseOptions;
+                    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field", children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field-head", children: [
+                        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-label", title: headerName, children: headerName }),
+                        status === "saving" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-state", "data-state": "saving", children: "\u4FDD\u5B58\u4E2D..." }),
+                        status === "saved" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-state", "data-state": "saved", children: "\u5DF2\u4FDD\u5B58" })
+                      ] }),
+                      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+                        "select",
                         {
-                          type: "button",
-                          className: "idw-retry-link",
-                          onClick: () => void saveCell(row.rowNumber, colIndex, value, conflict),
-                          children: conflict ? "\u5F3A\u5236\u8986\u76D6" : "\u91CD\u8BD5"
+                          className: "idw-select",
+                          "aria-label": headerName,
+                          "data-flash": flash,
+                          disabled: !isParent && !parentValue,
+                          value: value.trim(),
+                          onChange: (e) => {
+                            const nextVal = e.target.value;
+                            if (isParent) {
+                              const nextSubs = categoryOptions[nextVal] ?? [];
+                              const subColIdx = subCategoryColOffset + 2;
+                              const subKey = cellKey(row.rowNumber, subColIdx);
+                              const curSub = subCategoryColOffset >= 0 ? getCellDisplayValue(row, subCategoryColOffset).trim() : "";
+                              const resetSub = subCategoryColOffset >= 0 && curSub !== "" && !nextSubs.includes(curSub);
+                              setDrafts((prev) => ({
+                                ...prev,
+                                [key]: nextVal,
+                                ...resetSub ? { [subKey]: "" } : {}
+                              }));
+                              const edits = [{ rowNumber: row.rowNumber, colIndex, value: nextVal }];
+                              if (resetSub) {
+                                edits.push({ rowNumber: row.rowNumber, colIndex: subColIdx, value: "" });
+                              }
+                              void saveEditsBatch(edits);
+                            } else {
+                              setDrafts((prev) => ({ ...prev, [key]: nextVal }));
+                              void saveCell(row.rowNumber, colIndex, nextVal, false);
+                            }
+                          },
+                          children: [
+                            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "", children: isParent ? "\u9009\u62E9\u670D\u52A1\u5206\u7C7B..." : parentValue ? "\u9009\u62E9\u670D\u52A1\u5B50\u5206\u7C7B..." : "\u8BF7\u5148\u9009\u670D\u52A1\u5206\u7C7B" }),
+                            optionList.map((opt) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: opt, children: opt }, opt))
+                          ]
                         }
-                      )
-                    ] })
-                  ] }, key);
-                }) }) }) })
+                      ),
+                      errText && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field-error", children: [
+                        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: errText }),
+                        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                          "button",
+                          {
+                            type: "button",
+                            className: "idw-retry-link",
+                            onClick: () => void saveCell(row.rowNumber, colIndex, value, conflict),
+                            children: conflict ? "\u5F3A\u5236\u8986\u76D6" : "\u91CD\u8BD5"
+                          }
+                        )
+                      ] })
+                    ] }, key);
+                  };
+                  return row.cells.map((cellValue, colOffset) => {
+                    if (hasCategoryPair && colOffset === secondCategoryOffset) {
+                      return null;
+                    }
+                    if (hasCategoryPair && colOffset === firstCategoryOffset) {
+                      return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field-pair", children: [
+                        renderCategoryDropdown(categoryColOffset, true),
+                        renderCategoryDropdown(subCategoryColOffset, false)
+                      ] }, `cat-pair-${row.rowNumber}`);
+                    }
+                    const colIndex = colOffset + 2;
+                    const key = cellKey(row.rowNumber, colIndex);
+                    const headerName = snapshot?.headers[colIndex - 1] ?? `\u5217 ${colIndex}`;
+                    const value = Object.hasOwn(drafts, key) ? drafts[key] : cellValue;
+                    const status = fieldStatus[key];
+                    const errText = fieldErrors[key];
+                    const flash = status === "saved" || status === "error" ? status : void 0;
+                    const cellSla = colOffset === slaColOffset ? evaluateSla(value, nowDate) : null;
+                    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field", children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field-head", children: [
+                        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-label", title: headerName, children: headerName }),
+                        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "inline-flex", alignItems: "center", gap: 6 }, children: [
+                          cellSla && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-sla-pill", "data-tone": cellSla.tone, children: cellSla.label }),
+                          status === "saving" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-state", "data-state": "saving", children: "\u4FDD\u5B58\u4E2D..." }),
+                          status === "saved" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "idw-field-state", "data-state": "saved", children: "\u5DF2\u4FDD\u5B58" })
+                        ] })
+                      ] }),
+                      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                        AutoTextarea,
+                        {
+                          ariaLabel: headerName,
+                          value,
+                          flash,
+                          placeholder: `\u8F93\u5165${headerName}...`,
+                          onChange: (nextVal) => {
+                            setDrafts((prev) => ({ ...prev, [key]: nextVal }));
+                            if (fieldStatus[key] === "error") {
+                              setFieldStatus((prev) => {
+                                const copy = { ...prev };
+                                delete copy[key];
+                                return copy;
+                              });
+                            }
+                          },
+                          onBlur: (currentVal) => {
+                            void saveCell(row.rowNumber, colIndex, currentVal, false);
+                          },
+                          onKeyDown: (e) => {
+                            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+                              e.preventDefault();
+                              void saveCell(row.rowNumber, colIndex, e.currentTarget.value, false);
+                            } else if (e.key === "Escape") {
+                              e.currentTarget.blur();
+                            }
+                          }
+                        }
+                      ),
+                      errText && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "idw-field-error", children: [
+                        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: errText }),
+                        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                          "button",
+                          {
+                            type: "button",
+                            className: "idw-retry-link",
+                            onClick: () => void saveCell(row.rowNumber, colIndex, value, conflict),
+                            children: conflict ? "\u5F3A\u5236\u8986\u76D6" : "\u91CD\u8BD5"
+                          }
+                        )
+                      ] })
+                    ] }, key);
+                  });
+                })() }) }) })
               ]
             },
             row.rowNumber
@@ -8928,7 +9216,7 @@
 }
 
 .idw-card[data-state='hover'] {
-  width: var(--idw-hover-width, 224px);
+  width: var(--idw-hover-width, 248px);
   border-radius: 12px 0 0 12px;
   background: var(--idw-tab-hover-bg);
   box-shadow: var(--idw-shadow-hover);
@@ -9137,7 +9425,43 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
 }
+
+.idw-field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.idw-select[data-flash='saved'] {
+  box-shadow: inset 0 0 0 1px var(--idw-ok-fg);
+}
+
+.idw-select[data-flash='error'] {
+  border-color: var(--idw-err-fg);
+  box-shadow: inset 0 0 0 1px var(--idw-err-fg);
+}
+
+.idw-mini-sla,
+.idw-sla-pill {
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.idw-mini-sla[data-tone='err'],
+.idw-sla-pill[data-tone='err'] { background: linear-gradient(135deg, #f43f5e, #dc2626); }
+.idw-mini-sla[data-tone='warn'],
+.idw-sla-pill[data-tone='warn'] { background: linear-gradient(135deg, #fbbf24, #d97706); }
+.idw-mini-sla[data-tone='ok'],
+.idw-sla-pill[data-tone='ok'] { background: linear-gradient(135deg, #34d399, #16a34a); }
 
 .idw-field-head {
   display: flex;

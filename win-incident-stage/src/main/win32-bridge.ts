@@ -5,6 +5,8 @@ interface User32Api {
   keybdEvent: (bVk: number, bScan: number, dwFlags: number, dwExtraInfo: number) => void
 }
 
+const VK_VOLUME_DOWN = 0xae
+const VK_VOLUME_UP = 0xaf
 const VK_MEDIA_NEXT_TRACK = 0xb0
 const VK_MEDIA_PREV_TRACK = 0xb1
 const VK_MEDIA_PLAY_PAUSE = 0xb3
@@ -170,6 +172,22 @@ export function sendMediaKey(action: 'prev' | 'next' | 'toggle'): boolean {
   try {
     api.keybdEvent(vk, 0, 0, 0)
     api.keybdEvent(vk, 0, KEYEVENTF_KEYUP, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function sendVolumeKey(direction: 'up' | 'down', steps = 2): boolean {
+  const api = loadUser32()
+  if (!api) return false
+  const vk = direction === 'up' ? VK_VOLUME_UP : VK_VOLUME_DOWN
+  const count = Math.min(8, Math.max(1, Math.round(steps)))
+  try {
+    for (let i = 0; i < count; i += 1) {
+      api.keybdEvent(vk, 0, KEYEVENTF_EXTENDEDKEY, 0)
+      api.keybdEvent(vk, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0)
+    }
     return true
   } catch {
     return false

@@ -14,12 +14,20 @@ import type {
   DesktopPreferences,
   DrawerSnapshot,
   IncidentRow,
+  MusicSourceMode,
   SaveResult,
   ShortcutActionType,
   StatusCheckResult,
   TodoItem,
   TrafficLightShortcut,
 } from '../shared/types.ts'
+import {
+  DEFAULT_SERVICE_CATEGORIES,
+  evaluateSla,
+  isServiceCategoryHeader,
+  isServiceSubCategoryHeader,
+  isSlaHeader,
+} from '../shared/sla.ts'
 import { BongoCatWidget, HoloTodoStageCard } from './BongoCatWidget.tsx'
 import {
   CheckIcon,
@@ -203,7 +211,10 @@ export function StageWorkspace() {
     stageWidth: 344,
     showCat: true,
     showPlayer: true,
+    musicSource: 'smtc',
     musicFolder: '',
+    musicWebUrl: '',
+    musicVolume: 65,
     trafficLights: DEFAULT_SHORTCUTS,
     todos: [],
     todoIntervalMinutes: 60,
@@ -211,6 +222,7 @@ export function StageWorkspace() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   const [pathInput, setPathInput] = useState('')
+  const [webMusicUrlInput, setWebMusicUrlInput] = useState('')
   const [shortcutDrafts, setShortcutDrafts] = useState<TrafficLightShortcut[]>([...DEFAULT_SHORTCUTS])
   const [hoveredLightId, setHoveredLightId] = useState<string | null>(null)
   const [lightsExpanded, setLightsExpanded] = useState(false)
@@ -223,6 +235,7 @@ export function StageWorkspace() {
   const [hoveredRow, setHoveredRow] = useState<number | null>(null)
   const [stageWidth, setStageWidth] = useState(344)
   const [resizing, setResizing] = useState(false)
+  const [nowTick, setNowTick] = useState(() => Date.now())
 
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldSaveState>>({})
@@ -258,6 +271,24 @@ export function StageWorkspace() {
     () => (activeRowNumber === null ? null : snapshot?.rows.find(r => r.rowNumber === activeRowNumber) ?? null),
     [activeRowNumber, snapshot],
   )
+  const categoryOptions = snapshot?.categoryOptions ?? DEFAULT_SERVICE_CATEGORIES
+  const slaColOffset = useMemo(() => {
+    const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isSlaHeader(h))
+    return idx > 0 ? idx - 1 : -1
+  }, [snapshot?.headers])
+  const categoryColOffset = useMemo(() => {
+    const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isServiceCategoryHeader(h))
+    return idx > 0 ? idx - 1 : -1
+  }, [snapshot?.headers])
+  const subCategoryColOffset = useMemo(() => {
+    const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isServiceSubCategoryHeader(h))
+    return idx > 0 ? idx - 1 : -1
+  }, [snapshot?.headers])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const clearHoverTimers = useCallback(() => {
     if (hoverInTimerRef.current !== null) {
@@ -322,9 +353,14 @@ export function StageWorkspace() {
       if (!resizingRef.current) pushInteractive(false)
     }
 
+    const offBlur = window.stageApi.onWindowBlur(() => {
+      lastInteractive = null
+    })
+
     window.addEventListener('pointermove', onPointerMove, { passive: true })
     document.addEventListener('mouseleave', onMouseLeave)
     return () => {
+      offBlur()
       window.removeEventListener('pointermove', onPointerMove)
       document.removeEventListener('mouseleave', onMouseLeave)
     }
@@ -389,6 +425,7 @@ export function StageWorkspace() {
     void window.stageApi.getPrefs().then((p) => {
       setPrefs(p)
       setStageWidth(p.stageWidth)
+      setWebMusicUrlInput(p.musicWebUrl)
       setShortcutDrafts(p.trafficLights.map(item => ({ ...item })))
     })
     void loadData()
@@ -396,6 +433,7 @@ export function StageWorkspace() {
     const offPrefs = window.stageApi.onPrefsChanged((p) => {
       setPrefs(p)
       setStageWidth(p.stageWidth)
+      setWebMusicUrlInput(p.musicWebUrl)
       setShortcutDrafts(p.trafficLights.map(item => ({ ...item })))
       if (!p.showCat) {
         setTodoStageOpen(false)
@@ -642,6 +680,92 @@ export function StageWorkspace() {
       }
     })
   }, [enqueueSave, markFieldSaved, triggerGlobalSavedPulse])
+
+  const nowDate = useMemo(() => new Date(nowTick), [nowTick])
+
+  const getCellDisplayValue = useCallback((row: IncidentRow, colOffset: number): string => {
+    if (colOffset < 0 || colOffset >= row.cells.length) return ''
+    const k = cellKey(row.rowNumber, colOffset + 2)
+    return Object.hasOwn(drafts, k) ? drafts[k] : (row.cells[colOffset] ?? '')
+  }, [drafts])
+
+  const getRowSla = useCallback((row: IncidentRow) => {
+    if (slaColOffset < 0) return null
+    return evaluateSla(getCellDisplayValue(row, slaColOffset), nowDate)
+  }, [getCellDisplayValue, nowDate, slaColOffset])
+
+  const saveEditsBatch = useCallback((edits: readonly CellEdit[]): Promise<boolean> => {
+    if (edits.length === 0) return Promise.resolve(true)
+    if (edits.length === 1) {
+      return saveCell(edits[0].rowNumber, edits[0].colIndex, edits[0].value, false)
+    }
+    return enqueueSave(async () => {
+      const snap = snapshotRef.current
+      if (!snap || !snap.activeSheet) return false
+      if (conflictRef.current) return false
+
+      setFieldStatus(prev => {
+        const next = { ...prev }
+        for (const edit of edits) next[cellKey(edit.rowNumber, edit.colIndex)] = 'saving'
+        return next
+      })
+      try {
+        const res = await window.stageApi.invoke<SaveResult>('save-batch', {
+          sheetName: snap.activeSheet,
+          edits,
+          expectedVersion: versionRef.current,
+          forceOverwrite: false,
+        })
+        if (res.saved) {
+          versionRef.current = res.version
+          const editMap = new Map(edits.map(e => [cellKey(e.rowNumber, e.colIndex), e.value]))
+          setSnapshot(prev => {
+            if (!prev) return prev
+            const updatedRows = prev.rows.map(r => {
+              const nextCells = [...r.cells]
+              let touched = false
+              for (let c = 0; c < r.cells.length; c += 1) {
+                const v = editMap.get(cellKey(r.rowNumber, c + 2))
+                if (v !== undefined) {
+                  nextCells[c] = v
+                  touched = true
+                }
+              }
+              return touched ? { ...r, cells: nextCells } : r
+            })
+            return { ...prev, rows: updatedRows, version: res.version }
+          })
+          setDrafts(prev => {
+            const copy = { ...prev }
+            for (const edit of edits) {
+              const k = cellKey(edit.rowNumber, edit.colIndex)
+              if (copy[k] === edit.value) delete copy[k]
+            }
+            return copy
+          })
+          for (const edit of edits) markFieldSaved(cellKey(edit.rowNumber, edit.colIndex))
+          setStale(false)
+          setConflict(false)
+          setBannerError(null)
+          triggerGlobalSavedPulse()
+          return true
+        }
+        if (res.conflict) {
+          setStale(true)
+          setConflict(true)
+        }
+        setFieldStatus(prev => {
+          const next = { ...prev }
+          for (const edit of edits) next[cellKey(edit.rowNumber, edit.colIndex)] = 'error'
+          return next
+        })
+        return false
+      } catch (err) {
+        setBannerError(err instanceof Error ? err.message : '保存失败')
+        return false
+      }
+    })
+  }, [enqueueSave, markFieldSaved, saveCell, triggerGlobalSavedPulse])
 
   const handleRefreshClick = useCallback(() => {
     if (hasDirty && !stale) {
@@ -1227,7 +1351,7 @@ export function StageWorkspace() {
                 >
                   <div className="stg-toggle-meta">
                     <span className="stg-toggle-title">显示水滴播放器</span>
-                    <span className="stg-toggle-sub">平时缩小为水滴，悬停放大现黑洞光晕；左/右切歌，右键管理播放文件夹</span>
+                    <span className="stg-toggle-sub">液态水位随音量升降 · 滚轮调音量，支持网页音乐登录后后台播放</span>
                   </div>
                   <button
                     type="button"
@@ -1245,32 +1369,90 @@ export function StageWorkspace() {
                 </div>
 
                 {prefs.showPlayer && (
-                  <div className="stg-settings-row">
-                    <div className="stg-settings-label">
-                      <span>本地音乐播放文件夹（留空则监听系统媒体）</span>
+                  <>
+                    <div className="stg-settings-row">
+                      <div className="stg-settings-label">
+                        <span>音乐播放源</span>
+                        <span>悬停球体滚轮调音量 · {prefs.musicVolume}%</span>
+                      </div>
+                      <select
+                        className="stg-select"
+                        value={prefs.musicSource}
+                        onChange={e => void window.stageApi.updatePrefs({ musicSource: e.target.value as MusicSourceMode })}
+                      >
+                        <option value="smtc">系统媒体控制 (Windows SMTC)</option>
+                        <option value="local">本地音乐文件夹</option>
+                        <option value="web">网页音乐网站（球内登录后台播放）</option>
+                      </select>
                     </div>
-                    <div className="stg-settings-input-row">
-                      <input
-                        type="text"
-                        className="stg-input"
-                        readOnly
-                        value={prefs.musicFolder || '当前使用系统媒体控制 (SMTC)'}
-                        title={prefs.musicFolder}
-                      />
-                      <button type="button" className="stg-btn" onClick={() => void window.stageApi.pickMusicFolder()}>
-                        选择...
-                      </button>
-                      {prefs.musicFolder && (
-                        <button
-                          type="button"
-                          className="stg-btn"
-                          onClick={() => void window.stageApi.updatePrefs({ musicFolder: '' })}
-                        >
-                          清除
-                        </button>
-                      )}
-                    </div>
-                  </div>
+
+                    {prefs.musicSource === 'local' && (
+                      <div className="stg-settings-row">
+                        <div className="stg-settings-label">
+                          <span>本地音乐播放文件夹</span>
+                        </div>
+                        <div className="stg-settings-input-row">
+                          <input
+                            type="text"
+                            className="stg-input"
+                            readOnly
+                            value={prefs.musicFolder || '未选择本地音乐文件夹'}
+                            title={prefs.musicFolder}
+                          />
+                          <button type="button" className="stg-btn" onClick={() => void window.stageApi.pickMusicFolder()}>
+                            选择...
+                          </button>
+                          {prefs.musicFolder && (
+                            <button
+                              type="button"
+                              className="stg-btn"
+                              onClick={() => void window.stageApi.updatePrefs({ musicFolder: '', musicSource: 'smtc' })}
+                            >
+                              清除
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {prefs.musicSource === 'web' && (
+                      <div className="stg-settings-row">
+                        <div className="stg-settings-label">
+                          <span>音乐网站地址（登录后关闭窗口即在球内后台播放）</span>
+                        </div>
+                        <div className="stg-settings-input-row">
+                          <input
+                            type="text"
+                            className="stg-input"
+                            value={webMusicUrlInput}
+                            placeholder="例如 https://music.163.com 或私人音乐站"
+                            onChange={e => setWebMusicUrlInput(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                void window.stageApi.openWebMusicWindow(webMusicUrlInput.trim() || undefined)
+                              }
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="stg-btn"
+                            data-primary="true"
+                            onClick={() => void window.stageApi.openWebMusicWindow(webMusicUrlInput.trim() || undefined)}
+                          >
+                            打开登录
+                          </button>
+                          <button
+                            type="button"
+                            className="stg-btn"
+                            onClick={() => void window.stageApi.clearWebMusicSession()}
+                            title="清除网页音乐 Cookie 与登录状态"
+                          >
+                            清缓存
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 <div className="stg-settings-input-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1544,12 +1726,16 @@ export function StageWorkspace() {
         {(snapshot?.rows ?? []).map((row, idx) => {
           const isActive = activeRowNumber === row.rowNumber
           const isHovered = hoveredRow === row.rowNumber
-          const tone = getStatusTone(row)
+          const rowSla = getRowSla(row)
           const rowHasDirty = row.cells.some((cellVal, colOffset) => {
             const k = cellKey(row.rowNumber, colOffset + 2)
             return Object.hasOwn(drafts, k) && drafts[k] !== cellVal
           })
+          const badgeTone = rowSla ? rowSla.tone : (rowHasDirty ? 'accent' : getStatusTone(row))
           const previewText = row.cells.find(c => c.trim() !== '') ?? '（点击展开编辑详情）'
+          const hoverTip = rowSla
+            ? `${row.idText}\n${previewText}\nSLA: ${rowSla.label}`
+            : `${row.idText}\n${previewText}`
 
           return (
             <div
@@ -1561,14 +1747,21 @@ export function StageWorkspace() {
               onMouseEnter={() => handleRailMouseEnter(row.rowNumber)}
               onMouseLeave={() => handleRailMouseLeave(row.rowNumber)}
               onClick={() => handleSelectStage(row.rowNumber)}
-              title={isHovered ? undefined : `${row.idText}\n${previewText}`}
+              title={isHovered ? undefined : hoverTip}
             >
               <span
                 className="stg-corner-badge"
-                data-tone={rowHasDirty ? 'accent' : tone}
+                data-tone={badgeTone}
+                title={rowSla ? `SLA: ${rowSla.label}` : undefined}
               >
                 {idx + 1}
               </span>
+
+              {isHovered && rowSla && (
+                <span className="stg-mini-sla" data-tone={rowSla.tone}>
+                  {rowSla.shortLabel}
+                </span>
+              )}
 
               <div className="stg-mini-top">
                 <span className="stg-mini-id">
@@ -1605,12 +1798,13 @@ export function StageWorkspace() {
             <span
               className="stg-dot"
               data-tone={
-                activeRow.cells.some((c, i) => {
+                getRowSla(activeRow)?.tone ??
+                (activeRow.cells.some((c, i) => {
                   const k = cellKey(activeRow.rowNumber, i + 2)
                   return Object.hasOwn(drafts, k) && drafts[k] !== c
                 })
                   ? 'accent'
-                  : getStatusTone(activeRow)
+                  : getStatusTone(activeRow))
               }
             />
             <span className="stg-stage-id" title={activeRow.idText}>
@@ -1642,73 +1836,193 @@ export function StageWorkspace() {
           </div>
 
           <div className="stg-stage-form">
-            {activeRow.cells.map((cellValue, colOffset) => {
-              const colIndex = colOffset + 2
-              const key = cellKey(activeRow.rowNumber, colIndex)
-              const headerName = snapshot?.headers[colIndex - 1] ?? `列 ${colIndex}`
-              const value = Object.hasOwn(drafts, key) ? drafts[key] : cellValue
-              const status = fieldStatus[key]
-              const errText = fieldErrors[key]
-              const flash = status === 'saved' || status === 'error' ? status : undefined
+            {(() => {
+              const hasCategoryPair = categoryColOffset >= 0 && subCategoryColOffset >= 0
+              const firstCategoryOffset = hasCategoryPair
+                ? Math.min(categoryColOffset, subCategoryColOffset)
+                : -1
+              const secondCategoryOffset = hasCategoryPair
+                ? Math.max(categoryColOffset, subCategoryColOffset)
+                : -1
 
-              return (
-                <div key={key} className="stg-field">
-                  <div className="stg-field-head">
-                    <span className="stg-field-label" title={headerName}>
-                      {headerName}
-                    </span>
-                    {status === 'saving' && (
-                      <span className="stg-field-state" data-state="saving">保存中...</span>
-                    )}
-                    {status === 'saved' && (
-                      <span className="stg-field-state" data-state="saved">已保存</span>
+              const renderCategoryDropdown = (offset: number, isParent: boolean) => {
+                const colIndex = offset + 2
+                const key = cellKey(activeRow.rowNumber, colIndex)
+                const headerName = snapshot?.headers[colIndex - 1] ?? (isParent ? '服务分类' : '服务子分类')
+                const value = getCellDisplayValue(activeRow, offset)
+                const status = fieldStatus[key]
+                const errText = fieldErrors[key]
+                const flash = status === 'saved' || status === 'error' ? status : undefined
+
+                const parentValue = categoryColOffset >= 0 ? getCellDisplayValue(activeRow, categoryColOffset).trim() : ''
+                const baseOptions = isParent
+                  ? Object.keys(categoryOptions)
+                  : (parentValue ? (categoryOptions[parentValue] ?? []) : [])
+                const optionList =
+                  value.trim() !== '' && !baseOptions.includes(value.trim())
+                    ? [value.trim(), ...baseOptions]
+                    : baseOptions
+
+                return (
+                  <div key={key} className="stg-field">
+                    <div className="stg-field-head">
+                      <span className="stg-field-label" title={headerName}>
+                        {headerName}
+                      </span>
+                      {status === 'saving' && (
+                        <span className="stg-field-state" data-state="saving">保存中...</span>
+                      )}
+                      {status === 'saved' && (
+                        <span className="stg-field-state" data-state="saved">已保存</span>
+                      )}
+                    </div>
+
+                    <select
+                      className="stg-select"
+                      aria-label={headerName}
+                      data-flash={flash}
+                      disabled={!isParent && !parentValue}
+                      value={value.trim()}
+                      onChange={(e) => {
+                        const nextVal = e.target.value
+                        if (isParent) {
+                          const nextSubs = categoryOptions[nextVal] ?? []
+                          const subColIdx = subCategoryColOffset + 2
+                          const subKey = cellKey(activeRow.rowNumber, subColIdx)
+                          const curSub = subCategoryColOffset >= 0 ? getCellDisplayValue(activeRow, subCategoryColOffset).trim() : ''
+                          const resetSub = subCategoryColOffset >= 0 && curSub !== '' && !nextSubs.includes(curSub)
+
+                          setDrafts(prev => ({
+                            ...prev,
+                            [key]: nextVal,
+                            ...(resetSub ? { [subKey]: '' } : {}),
+                          }))
+
+                          const edits: CellEdit[] = [{ rowNumber: activeRow.rowNumber, colIndex, value: nextVal }]
+                          if (resetSub) {
+                            edits.push({ rowNumber: activeRow.rowNumber, colIndex: subColIdx, value: '' })
+                          }
+                          void saveEditsBatch(edits)
+                        } else {
+                          setDrafts(prev => ({ ...prev, [key]: nextVal }))
+                          void saveCell(activeRow.rowNumber, colIndex, nextVal, false)
+                        }
+                      }}
+                    >
+                      <option value="">
+                        {isParent ? '选择服务分类...' : parentValue ? '选择服务子分类...' : '请先选服务分类'}
+                      </option>
+                      {optionList.map(opt => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+
+                    {errText && (
+                      <div className="stg-field-error">
+                        <span>{errText}</span>
+                        <button
+                          type="button"
+                          className="stg-retry-link"
+                          onClick={() => void saveCell(activeRow.rowNumber, colIndex, value, conflict)}
+                        >
+                          {conflict ? '强制覆盖' : '重试'}
+                        </button>
+                      </div>
                     )}
                   </div>
+                )
+              }
 
-                  <AutoTextarea
-                    ariaLabel={headerName}
-                    value={value}
-                    flash={flash}
-                    placeholder={`输入${headerName}...`}
-                    onChange={(nextVal) => {
-                      setDrafts(prev => ({ ...prev, [key]: nextVal }))
-                      if (fieldStatus[key] === 'error') {
-                        setFieldStatus(prev => {
-                          const copy = { ...prev }
-                          delete copy[key]
-                          return copy
-                        })
-                      }
-                    }}
-                    onBlur={(currentVal) => {
-                      void saveCell(activeRow.rowNumber, colIndex, currentVal, false)
-                    }}
-                    onKeyDown={(e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-                        e.preventDefault()
-                        void saveCell(activeRow.rowNumber, colIndex, e.currentTarget.value, false)
-                      } else if (e.key === 'Escape') {
-                        e.currentTarget.blur()
-                        setActiveRowNumber(null)
-                      }
-                    }}
-                  />
-
-                  {errText && (
-                    <div className="stg-field-error">
-                      <span>{errText}</span>
-                      <button
-                        type="button"
-                        className="stg-retry-link"
-                        onClick={() => void saveCell(activeRow.rowNumber, colIndex, value, conflict)}
-                      >
-                        {conflict ? '强制覆盖' : '重试'}
-                      </button>
+              return activeRow.cells.map((cellValue, colOffset) => {
+                if (hasCategoryPair && colOffset === secondCategoryOffset) {
+                  return null
+                }
+                if (hasCategoryPair && colOffset === firstCategoryOffset) {
+                  return (
+                    <div key={`cat-pair-${activeRow.rowNumber}`} className="stg-field-pair">
+                      {renderCategoryDropdown(categoryColOffset, true)}
+                      {renderCategoryDropdown(subCategoryColOffset, false)}
                     </div>
-                  )}
-                </div>
-              )
-            })}
+                  )
+                }
+
+                const colIndex = colOffset + 2
+                const key = cellKey(activeRow.rowNumber, colIndex)
+                const headerName = snapshot?.headers[colIndex - 1] ?? `列 ${colIndex}`
+                const value = Object.hasOwn(drafts, key) ? drafts[key] : cellValue
+                const status = fieldStatus[key]
+                const errText = fieldErrors[key]
+                const flash = status === 'saved' || status === 'error' ? status : undefined
+                const cellSla = colOffset === slaColOffset ? evaluateSla(value, nowDate) : null
+
+                return (
+                  <div key={key} className="stg-field">
+                    <div className="stg-field-head">
+                      <span className="stg-field-label" title={headerName}>
+                        {headerName}
+                      </span>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        {cellSla && (
+                          <span className="stg-sla-pill" data-tone={cellSla.tone}>
+                            {cellSla.label}
+                          </span>
+                        )}
+                        {status === 'saving' && (
+                          <span className="stg-field-state" data-state="saving">保存中...</span>
+                        )}
+                        {status === 'saved' && (
+                          <span className="stg-field-state" data-state="saved">已保存</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <AutoTextarea
+                      ariaLabel={headerName}
+                      value={value}
+                      flash={flash}
+                      placeholder={`输入${headerName}...`}
+                      onChange={(nextVal) => {
+                        setDrafts(prev => ({ ...prev, [key]: nextVal }))
+                        if (fieldStatus[key] === 'error') {
+                          setFieldStatus(prev => {
+                            const copy = { ...prev }
+                            delete copy[key]
+                            return copy
+                          })
+                        }
+                      }}
+                      onBlur={(currentVal) => {
+                        void saveCell(activeRow.rowNumber, colIndex, currentVal, false)
+                      }}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                          e.preventDefault()
+                          void saveCell(activeRow.rowNumber, colIndex, e.currentTarget.value, false)
+                        } else if (e.key === 'Escape') {
+                          e.currentTarget.blur()
+                          setActiveRowNumber(null)
+                        }
+                      }}
+                    />
+
+                    {errText && (
+                      <div className="stg-field-error">
+                        <span>{errText}</span>
+                        <button
+                          type="button"
+                          className="stg-retry-link"
+                          onClick={() => void saveCell(activeRow.rowNumber, colIndex, value, conflict)}
+                        >
+                          {conflict ? '强制覆盖' : '重试'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            })()}
           </div>
         </div>
       )}
@@ -1740,7 +2054,13 @@ export function StageWorkspace() {
       )}
 
       {/* Water-Droplet Black-Hole Floating Music Player */}
-      {prefs.showPlayer && <SiriMusicOrb />}
+      {prefs.showPlayer && (
+        <SiriMusicOrb
+          musicSource={prefs.musicSource}
+          musicWebUrl={prefs.musicWebUrl}
+          musicVolume={prefs.musicVolume}
+        />
+      )}
     </div>
   )
 }

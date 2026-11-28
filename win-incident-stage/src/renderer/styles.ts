@@ -783,6 +783,30 @@ html, body, #root {
 .stg-corner-badge[data-tone='ok'] { background: linear-gradient(135deg, #34d399, #16a34a); }
 .stg-corner-badge[data-tone='accent'] { background: linear-gradient(135deg, #60a5fa, #3b6fe0); }
 
+/* Hovered mini-card SLA remaining working hours pill beside corner badge */
+.stg-mini-sla {
+  position: absolute;
+  left: 17px;
+  bottom: -5px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #fff;
+  pointer-events: none;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.stg-mini-sla[data-tone='err'] { background: linear-gradient(135deg, #f43f5e, #dc2626); }
+.stg-mini-sla[data-tone='warn'] { background: linear-gradient(135deg, #fbbf24, #d97706); }
+.stg-mini-sla[data-tone='ok'] { background: linear-gradient(135deg, #34d399, #16a34a); }
+
 /* =========================================================
  * Foreground "On Stage" Floating Card
  * ========================================================= */
@@ -914,7 +938,38 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
 }
+
+.stg-field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.stg-select[data-flash='saved'] {
+  border-color: var(--stg-ok-fg);
+  box-shadow: 0 0 0 1px var(--stg-ok-fg);
+}
+
+.stg-select[data-flash='error'] {
+  border-color: var(--stg-err-fg);
+  box-shadow: 0 0 0 1px var(--stg-err-fg);
+}
+
+.stg-sla-pill {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #fff;
+}
+
+.stg-sla-pill[data-tone='err'] { background: linear-gradient(135deg, #f43f5e, #dc2626); }
+.stg-sla-pill[data-tone='warn'] { background: linear-gradient(135deg, #fbbf24, #d97706); }
+.stg-sla-pill[data-tone='ok'] { background: linear-gradient(135deg, #34d399, #16a34a); }
 
 .stg-field-head {
   display: flex;
@@ -1511,6 +1566,32 @@ html, body, #root {
   white-space: nowrap;
 }
 
+.stg-orb-vol-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: rgba(56, 189, 248, 0.16);
+  color: rgb(2, 132, 199);
+  transition: transform 140ms var(--stg-ease), background 140ms ease, color 140ms ease;
+}
+
+.stg-root[data-theme='dark'] .stg-orb-vol-badge {
+  color: rgb(125, 211, 252);
+}
+
+.stg-orb-vol-badge[data-active='true'] {
+  transform: scale(1.06);
+  background: rgba(245, 158, 11, 0.24);
+  color: rgb(217, 119, 6);
+}
+
+.stg-root[data-theme='dark'] .stg-orb-vol-badge[data-active='true'] {
+  color: rgb(252, 211, 77);
+}
+
 .stg-drop-cluster {
   pointer-events: auto;
   display: inline-flex;
@@ -1678,6 +1759,36 @@ html, body, #root {
   display: block;
 }
 
+.stg-water-level {
+  transition: transform 240ms var(--stg-ease);
+}
+
+.stg-water-wave-front {
+  animation: stg-wave-flow 4.4s linear infinite;
+}
+
+.stg-water-wave-back {
+  animation: stg-wave-flow-rev 6.2s linear infinite;
+}
+
+.stg-water-level[data-playing='true'] .stg-water-wave-front {
+  animation-duration: 2.3s;
+}
+
+.stg-water-level[data-playing='true'] .stg-water-wave-back {
+  animation-duration: 3.4s;
+}
+
+@keyframes stg-wave-flow {
+  0% { transform: translateX(0px); }
+  100% { transform: translateX(-100px); }
+}
+
+@keyframes stg-wave-flow-rev {
+  0% { transform: translateX(-100px); }
+  100% { transform: translateX(0px); }
+}
+
 .stg-drop-cover {
   position: absolute;
   inset: 0;
@@ -1691,6 +1802,10 @@ html, body, #root {
 
 .stg-drop-cover[data-visible='true'] {
   opacity: 1;
+}
+
+.stg-drop-cover[data-visible='true'][data-dimmed='true'] {
+  opacity: 0.2;
 }
 
 .stg-drop-meniscus {
@@ -1716,7 +1831,7 @@ html, body, #root {
   transition: opacity 160ms ease;
 }
 
-.stg-drop-sphere:hover .stg-drop-play-overlay {
+.stg-drop-sphere:hover .stg-drop-play-overlay:not([data-vol-hud='true']) {
   opacity: 1;
 }
 
@@ -1733,7 +1848,10 @@ html, body, #root {
   .stg-drop-sphere,
   .stg-drop-side,
   .stg-blackhole-halo,
-  .stg-blackhole-disk {
+  .stg-blackhole-disk,
+  .stg-water-level,
+  .stg-water-wave-front,
+  .stg-water-wave-back {
     transition: none !important;
     animation: none !important;
   }

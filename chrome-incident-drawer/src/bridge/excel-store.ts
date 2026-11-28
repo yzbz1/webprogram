@@ -3,6 +3,14 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import ExcelJS from 'exceljs'
+import {
+  DEFAULT_SERVICE_CATEGORIES,
+  addWorkingHours,
+  computeWorkingHoursRemaining,
+  evaluateSla,
+  formatLocalDateTime,
+} from '../shared/sla.ts'
+export { computeWorkingHoursRemaining, evaluateSla }
 import type {
   CellEdit,
   DrawerSnapshot,
@@ -14,13 +22,20 @@ import type {
 export const MAX_ROWS = 10
 export const MAX_SCAN_COLS = 30
 export const MAX_EDITABLE_COL = 50
-export const SAMPLE_HEADERS: readonly [string, string, string, string, string, string] = [
+export const CATEGORY_DICT_SHEET_NAMES: ReadonlySet<string> = new Set([
+  '服务分类字典',
+  '分类字典',
+])
+export const SAMPLE_HEADERS: readonly string[] = [
   '事件单号',
   '标题',
-  '紧急程度',
-  '处理状态',
-  '负责人',
-  '处理进展',
+  '问题描述',
+  '服务分类',
+  '服务子分类',
+  '解决方案：',
+  'SLA 到期时间',
+  '提单人',
+  '处理群组（welink群）',
 ]
 
 const LOCK_ERROR_CODES = new Set(['EBUSY', 'EPERM', 'EACCES'])
@@ -185,6 +200,34 @@ export function parseTicketCell(cell: ExcelJS.Cell): { idText: string; hyperlink
   }
 }
 
+function extractCategoryOptions(workbook: ExcelJS.Workbook): Record<string, readonly string[]> {
+  for (const name of CATEGORY_DICT_SHEET_NAMES) {
+    const dictWs = workbook.getWorksheet(name)
+    if (!dictWs) continue
+    const parsed: Record<string, string[]> = {}
+    const maxCol = Math.min(Math.max(dictWs.columnCount, 1), 30)
+    const headerRow = dictWs.getRow(1)
+    for (let c = 1; c <= maxCol; c += 1) {
+      const parent = formatCellValue(headerRow.getCell(c).value).trim()
+      if (!parent) continue
+      const subs: string[] = []
+      for (let r = 2; r <= dictWs.rowCount; r += 1) {
+        const sub = formatCellValue(dictWs.getRow(r).getCell(c).value).trim()
+        if (sub && !subs.includes(sub)) {
+          subs.push(sub)
+        }
+      }
+      if (subs.length > 0) {
+        parsed[parent] = subs
+      }
+    }
+    if (Object.keys(parsed).length > 0) {
+      return parsed
+    }
+  }
+  return DEFAULT_SERVICE_CATEGORIES
+}
+
 export function resolveTargetSheet(
   workbook: ExcelJS.Workbook,
   requestedSheetName?: string,
@@ -194,7 +237,9 @@ export function resolveTargetSheet(
   activeSheetName: string | null
   matchedToday: boolean
 } {
-  const sheetNames = workbook.worksheets.map(ws => ws.name)
+  const sheetNames = workbook.worksheets
+    .map(ws => ws.name)
+    .filter(name => !CATEGORY_DICT_SHEET_NAMES.has(name.trim()))
   const candidates = getTodayDateCandidates(now).map(c => c.toLowerCase())
 
   if (requestedSheetName && requestedSheetName.trim() !== '') {
@@ -378,6 +423,7 @@ export async function loadWorkbookData(
       rows,
       version,
       totalDataRows,
+      categoryOptions: extractCategoryOptions(workbook),
     }
   } catch (error) {
     return {
@@ -522,6 +568,58 @@ export async function saveCellsToWorkbook(params: {
   })
 }
 
+export function applyCategoryDictionary(
+  workbook: ExcelJS.Workbook,
+  targetSheet: ExcelJS.Worksheet,
+  categoryColIndex: number,
+  subCategoryColIndex: number,
+  maxRow = 30,
+): void {
+  const existing = workbook.getWorksheet('服务分类字典')
+  if (existing) {
+    workbook.removeWorksheet(existing.id)
+  }
+
+  const dictWs = workbook.addWorksheet('服务分类字典')
+  const parents = Object.keys(DEFAULT_SERVICE_CATEGORIES)
+  const colLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
+
+  parents.forEach((parent, idx) => {
+    const colNum = idx + 1
+    const colLetter = colLetters[idx]
+    const headCell = dictWs.getRow(1).getCell(colNum)
+    headCell.value = parent
+    headCell.font = { bold: true }
+    dictWs.getColumn(colNum).width = 18
+
+    const subs = DEFAULT_SERVICE_CATEGORIES[parent] ?? []
+    subs.forEach((sub, subIdx) => {
+      dictWs.getRow(subIdx + 2).getCell(colNum).value = sub
+    })
+
+    if (colLetter && subs.length > 0) {
+      workbook.definedNames.add(`'服务分类字典'!$${colLetter}$2:$${colLetter}$${subs.length + 1}`, parent)
+    }
+  })
+
+  const lastParentCol = colLetters[Math.max(0, parents.length - 1)] ?? 'D'
+  const parentFormula = `'服务分类字典'!$A$1:$${lastParentCol}$1`
+  const catColLetter = colLetters[categoryColIndex - 1] ?? 'D'
+
+  for (let r = 2; r <= maxRow; r += 1) {
+    targetSheet.getRow(r).getCell(categoryColIndex).dataValidation = {
+      type: 'list',
+      allowBlank: true,
+      formulae: [parentFormula],
+    }
+    targetSheet.getRow(r).getCell(subCategoryColIndex).dataValidation = {
+      type: 'list',
+      allowBlank: true,
+      formulae: [`=INDIRECT(${catColLetter}${r})`],
+    }
+  }
+}
+
 export async function createSampleWorkbook(excelPath: string, now: Date = new Date()): Promise<string> {
   const resolvedPath = resolve(excelPath)
   await mkdir(dirname(resolvedPath), { recursive: true })
@@ -531,17 +629,20 @@ export async function createSampleWorkbook(excelPath: string, now: Date = new Da
   const yesterday = getTodaySheetName(yesterdayDate)
 
   const workbook = new ExcelJS.Workbook()
-  workbook.creator = 'chrome-incident-drawer'
+  workbook.creator = 'win-incident-stage'
   workbook.created = now
 
   const wsToday = workbook.addWorksheet(today)
   wsToday.columns = [
+    { width: 20 },
+    { width: 30 },
+    { width: 36 },
+    { width: 15 },
+    { width: 17 },
+    { width: 34 },
+    { width: 19 },
+    { width: 12 },
     { width: 22 },
-    { width: 32 },
-    { width: 14 },
-    { width: 14 },
-    { width: 14 },
-    { width: 40 },
   ]
 
   const headerRow = wsToday.addRow([...SAMPLE_HEADERS])
@@ -552,72 +653,74 @@ export async function createSampleWorkbook(excelPath: string, now: Date = new Da
     fgColor: { argb: 'FFEFF3FA' },
   }
 
+  const sla = (workHours: number) => formatLocalDateTime(addWorkingHours(now, workHours))
+
   const sampleRows: Array<{
     id: string
     url: string | null
     formulaLink?: boolean
-    cols: [string, string, string, string, string]
+    cols: [string, string, string, string, string, string, string, string]
   }> = [
     {
       id: `INC-${today}-01`,
       url: `https://itsm.company.internal/tickets/INC-${today}-01`,
-      cols: ['核心网关连接池超时告警', 'P1 紧急', '处理中', '张伟', '已定位慢查询 SQL，正在灰度回滚索引变更并临时扩容连接池'],
+      cols: ['[CI]核心网关连接池超时告警', '业务请求间歇性 504，连接池等待队列打满', '基础架构', '网络与网关', '正在灰度回滚索引变更并临时扩容连接池', sla(1.8), '张伟', '核心网络保障群'],
     },
     {
       id: `INC-${today}-02`,
       url: `https://itsm.company.internal/tickets/INC-${today}-02`,
       formulaLink: true,
-      cols: ['内网 SSO 单点登录回调 502', 'P1 紧急', '待处理', '李敏', '等待认证中心提供网关日志与证书链核验结果'],
+      cols: ['内网 SSO 单点登录回调 502', '部分部门登录跳转认证中心返回 502', '应用系统', '单点登录与认证', '等待认证中心提供网关日志与证书链核验', sla(3.2), '李敏', '统一认证支持群'],
     },
     {
       id: `INC-${today}-03`,
       url: `https://itsm.company.internal/tickets/INC-${today}-03`,
-      cols: ['报表导出服务内存持续上涨', 'P2 高', '处理中', '王强', '已采集堆转储文件，初步怀疑 Excel 流式导出未及时释放'],
+      cols: ['报表导出服务内存持续上涨', '大批量导出触发 OldGen 频繁 FullGC', '应用系统', '财务与报表', '已采集堆转储，排查 Excel 流式释放', sla(5.5), '王强', '财务系统运维群'],
     },
     {
       id: `INC-${today}-04`,
       url: `https://itsm.company.internal/tickets/INC-${today}-04`,
-      cols: ['消息队列积压消费延迟 > 5 分钟', 'P2 高', '待处理', '赵雪', '需核查下游风控接口超时配置'],
+      cols: ['消息队列积压消费延迟 > 5 分钟', '风控回调超时导致消费者线程阻塞', '中间件与数据', '消息队列', '核查下游风控接口超时配置并扩消费者', sla(6.8), '赵雪', '中间件SRE群'],
     },
     {
       id: `INC-${today}-05`,
       url: `https://itsm.company.internal/tickets/INC-${today}-05`,
-      cols: ['测试环境 K8s Ingress 证书即将到期', 'P3 中', '待确认', '陈晨', '已申请自动续签，待验证生效状态'],
+      cols: ['测试环境 K8s Ingress 证书即将到期', '域名证书将在 3 个工作日内过期', '基础架构', '容器与证书', '已申请自动续签，待验证生效状态', sla(11.0), '陈晨', '云原生平台群'],
     },
     {
       id: `INC-${today}-06`,
       url: `https://itsm.company.internal/tickets/INC-${today}-06`,
-      cols: ['财务对账定时任务昨日重试成功', 'P3 中', '观察中', '张伟', '补跑任务完成，观察今晚零点批次'],
+      cols: ['财务对账定时任务昨日重试成功', '夜间批次短暂超时后自动重试完成', '发布与运维', '定时任务调度', '补跑任务完成，继续观察今晚批次', sla(14.5), '张伟', '财务系统运维群'],
     },
     {
       id: `INC-${today}-07`,
       url: null,
-      cols: ['内部知识库全文检索偶发分词偏差', 'P4 低', '待处理', '李敏', '未附带外部工单链接，仅内部分析记录'],
+      cols: ['内部知识库全文检索偶发分词偏差', '专有名词检索命中率偏低（无外链）', '中间件与数据', '缓存与检索', '准备补充自定义分词词典灰度验证', sla(18.0), '李敏', '知识库研发群'],
     },
     {
       id: `INC-${today}-08`,
       url: `https://itsm.company.internal/tickets/INC-${today}-08`,
-      cols: ['OA 审批附件预览偶现水印错位', 'P3 中', '处理中', '王强', '前端已复现，正在调整 PDF Canvas DPI 缩放'],
+      cols: ['OA 审批附件预览偶现水印错位', '高分屏浏览器下 PDF 渲染比例偏移', '应用系统', 'OA与审批流', '前端已复现，正在调整 PDF Canvas DPI 缩放', sla(7.4), '王强', '办公平台支持群'],
     },
     {
       id: `INC-${today}-09`,
       url: `https://itsm.company.internal/tickets/INC-${today}-09`,
-      cols: ['内网 GitLab Runner 磁盘剩余低于 15%', 'P2 高', '待处理', '赵雪', '计划今晚清理过期构建缓存镜像'],
+      cols: ['内网 GitLab Runner 磁盘剩余低于 15%', '构建机镜像缓存持续增长触发预警', '发布与运维', 'CI/CD流水线', '计划今晚清理过期构建缓存镜像', sla(2.6), '赵雪', '效能平台运维群'],
     },
     {
       id: `INC-${today}-10`,
       url: `https://itsm.company.internal/tickets/INC-${today}-10`,
-      cols: ['CDN 静态资源回源耗时波动', 'P3 中', '观察中', '陈晨', '已切换备用回源节点，指标恢复平稳'],
+      cols: ['CDN 静态资源回源耗时波动', '华东边缘节点回源偶发抖动', '发布与运维', 'CDN与静态资源', '已切换备用回源节点，指标恢复平稳', sla(12.0), '陈晨', '核心网络保障群'],
     },
     {
       id: `INC-${today}-11`,
       url: `https://itsm.company.internal/tickets/INC-${today}-11`,
-      cols: ['第 11 条单据（验证面板只加载前 10 条且写回不丢此行）', 'P4 低', '待处理', '备选池', '本行仅用于保留校验'],
+      cols: ['第 11 条单据（验证面板只加载前 10 条且写回不丢此行）', '本行仅用于保留校验', '基础架构', '服务器与磁盘', '保留校验', sla(20.0), '备选池', '备选支持群'],
     },
     {
       id: `INC-${today}-12`,
       url: `https://itsm.company.internal/tickets/INC-${today}-12`,
-      cols: ['第 12 条单据（验证无损回写）', 'P4 低', '待处理', '备选池', '保留原始数据与格式'],
+      cols: ['第 12 条单据（验证无损回写）', '保留原始数据与格式', '中间件与数据', '数据库与SQL', '保留校验', sla(24.0), '备选池', '备选支持群'],
     },
   ]
 
@@ -639,10 +742,12 @@ export async function createSampleWorkbook(excelPath: string, now: Date = new Da
     }
   }
 
+  applyCategoryDictionary(workbook, wsToday, 4, 5, 30)
+
   const wsPrev = workbook.addWorksheet(yesterday)
   wsPrev.addRow([...SAMPLE_HEADERS])
-  wsPrev.addRow([`INC-${yesterday}-01`, '昨日历史遗留单据 1', 'P2 高', '已完成', '张伟', '已归档'])
-  wsPrev.addRow([`INC-${yesterday}-02`, '昨日历史遗留单据 2', 'P3 中', '已完成', '李敏', '已归档'])
+  wsPrev.addRow([`INC-${yesterday}-01`, '昨日历史遗留单据 1', '历史记录归档', '应用系统', 'OA与审批流', '已归档', sla(10.0), '张伟', '办公平台支持群'])
+  wsPrev.addRow([`INC-${yesterday}-02`, '昨日历史遗留单据 2', '历史记录归档', '基础架构', '网络与网关', '已归档', sla(12.0), '李敏', '核心网络保障群'])
 
   await workbook.xlsx.writeFile(resolvedPath)
   return resolvedPath

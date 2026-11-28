@@ -34,7 +34,13 @@ async function runTests() {
     assert.equal(snap1.exists, true)
     assert.equal(snap1.activeSheet, todaySheet)
     assert.equal(snap1.matchedToday, true)
-    assert.equal(snap1.headers.length, 6)
+    assert.equal(snap1.headers.length, 9)
+    assert.equal(snap1.headers[3], '服务分类')
+    assert.equal(snap1.headers[4], '服务子分类')
+    assert.equal(snap1.headers[6], 'SLA 到期时间')
+    assert.ok(snap1.categoryOptions && Object.keys(snap1.categoryOptions).length === 4)
+    assert.equal(snap1.categoryOptions['基础架构'].length, 3)
+    assert.equal(snap1.sheets.includes('服务分类字典'), false)
     assert.equal(snap1.rows.length, 10, 'should load only first 10 rows')
     assert.equal(snap1.totalDataRows, 12, 'totalDataRows should reflect all 12 rows')
 
@@ -119,7 +125,7 @@ async function runTests() {
       hyperlink: `https://itsm.company.internal/tickets/INC-${todaySheet}-01`,
     })
     assert.equal(wsCheck.getRow(12).getCell(2).value, '第 11 条单据（验证面板只加载前 10 条且写回不丢此行）')
-    assert.equal(wbCheck.worksheets.length, 2, 'yesterday sheet should remain intact')
+    assert.equal(wbCheck.worksheets.length, 3, 'yesterday + dictionary sheets should remain intact')
 
     // 3. External file modification -> check-status stale + save conflict + forceOverwrite
     const staleExpected = editRes.value.version
@@ -250,6 +256,22 @@ async function runTests() {
     assert.equal(mockStyleTags.length, 1)
     assert.equal(mockStyleTags[0].dataset.plugin, 'dsh-plugin-incident-drawer')
     assert.ok(mockStyleTags[0].textContent.includes('pointer-events: none !important'))
+    assert.ok(mockStyleTags[0].textContent.includes('idw-field-pair'))
+    assert.ok(mockStyleTags[0].textContent.includes('idw-mini-sla'))
+    assert.ok(mockStyleTags[0].textContent.includes('idw-sla-pill'))
+
+    // 5. Verify working-hours SLA calculation (Mon-Fri 08:30-18:00)
+    const mon9am = new Date(2026, 10, 30, 9, 0, 0)
+    const slaRed = excelStore.evaluateSla('2026-11-30 12:00', mon9am)
+    assert.equal(slaRed?.tone, 'err')
+    assert.equal(slaRed?.shortLabel, '3.0h')
+    const slaWarn = excelStore.evaluateSla('2026-11-30 15:00', mon9am)
+    assert.equal(slaWarn?.tone, 'warn')
+    assert.equal(slaWarn?.shortLabel, '6.0h')
+    const sat2100 = new Date(2026, 10, 28, 21, 0, 0)
+    const slaWeekend = excelStore.evaluateSla('2026-11-30 11:30', sat2100)
+    assert.equal(slaWeekend?.tone, 'err')
+    assert.equal(slaWeekend?.shortLabel, '3.0h')
 
     for (const d of [...effectDisposers, ...cleanups]) d()
     writeFileSync(join(tempDir, 'done.txt'), 'ok', 'utf8')

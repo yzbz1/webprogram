@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import type {
+  MusicSourceMode,
   ShortcutActionType,
   ThemePreference,
   TodoItem,
@@ -22,7 +23,10 @@ export interface StoredDesktopPrefs {
   stageWidth: number
   showCat: boolean
   showPlayer: boolean
+  musicSource: MusicSourceMode
   musicFolder: string
+  musicWebUrl: string
+  musicVolume: number
   trafficLights: TrafficLightShortcut[]
   todos: TodoItem[]
   todoIntervalMinutes: number
@@ -69,7 +73,10 @@ export const DEFAULT_DESKTOP_PREFS: StoredDesktopPrefs = {
   stageWidth: 344,
   showCat: true,
   showPlayer: true,
+  musicSource: 'smtc',
   musicFolder: '',
+  musicWebUrl: '',
+  musicVolume: 65,
   trafficLights: DEFAULT_TRAFFIC_LIGHTS.map(item => ({ ...item })),
   todos: DEFAULT_TODOS.map(item => ({ ...item })),
   todoIntervalMinutes: 60,
@@ -126,6 +133,32 @@ export function sanitizeTodos(input: unknown): TodoItem[] {
     })
   }
   return result
+}
+
+export function sanitizeMusicSource(input: unknown, fallbackFolder = ''): MusicSourceMode {
+  if (input === 'smtc' || input === 'local' || input === 'web') return input
+  return fallbackFolder.trim() !== '' ? 'local' : 'smtc'
+}
+
+export function sanitizeMusicVolume(input: unknown): number {
+  if (typeof input !== 'number' || !Number.isFinite(input)) {
+    return DEFAULT_DESKTOP_PREFS.musicVolume
+  }
+  return Math.min(100, Math.max(0, Math.round(input)))
+}
+
+export function sanitizeMusicWebUrl(input: unknown): string {
+  if (typeof input !== 'string') return ''
+  const trimmed = input.trim().slice(0, 512)
+  if (!trimmed) return ''
+  const candidate = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(trimmed) ? trimmed : `https://${trimmed}`
+  try {
+    const parsed = new URL(candidate)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return parsed.toString()
+  } catch {
+    return ''
+  }
 }
 
 export function sanitizeTodoInterval(input: unknown): number {
@@ -241,6 +274,12 @@ export class DesktopPrefsStore {
           showCat: typeof raw.showCat === 'boolean' ? raw.showCat : DEFAULT_DESKTOP_PREFS.showCat,
           showPlayer: typeof raw.showPlayer === 'boolean' ? raw.showPlayer : DEFAULT_DESKTOP_PREFS.showPlayer,
           musicFolder: typeof raw.musicFolder === 'string' ? raw.musicFolder.trim().slice(0, 512) : '',
+          musicSource: sanitizeMusicSource(
+            raw.musicSource,
+            typeof raw.musicFolder === 'string' ? raw.musicFolder : '',
+          ),
+          musicWebUrl: sanitizeMusicWebUrl(raw.musicWebUrl),
+          musicVolume: sanitizeMusicVolume(raw.musicVolume),
           trafficLights: sanitizeTrafficLights(raw.trafficLights),
           todos: sanitizeTodos(raw.todos),
           todoIntervalMinutes: sanitizeTodoInterval(raw.todoIntervalMinutes),

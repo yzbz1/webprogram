@@ -18,6 +18,13 @@ import type {
   StatusCheckResult,
 } from '../shared/types.ts'
 import {
+  DEFAULT_SERVICE_CATEGORIES,
+  evaluateSla,
+  isServiceCategoryHeader,
+  isServiceSubCategoryHeader,
+  isSlaHeader,
+} from '../shared/sla.ts'
+import {
   ChevronDownIcon,
   CollapseRightIcon,
   ExternalLinkIcon,
@@ -199,6 +206,7 @@ export function IncidentDrawer({ theme, apiCall = callExtensionApi }: IncidentDr
   const [hoveredRow, setHoveredRow] = useState<number | null>(null)
   const [expandedWidth, setExpandedWidth] = useState(readFallbackWidth)
   const [resizing, setResizing] = useState(false)
+  const [nowTick, setNowTick] = useState(() => Date.now())
 
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [fieldStatus, setFieldStatus] = useState<Record<string, FieldSaveState>>({})
@@ -228,6 +236,36 @@ export function IncidentDrawer({ theme, apiCall = callExtensionApi }: IncidentDr
   const hasDirty = dirtyEdits.length > 0
   const hasSaving = Object.values(fieldStatus).some(s => s === 'saving')
   const hasFieldError = Object.values(fieldStatus).some(s => s === 'error')
+  const categoryOptions = snapshot?.categoryOptions ?? DEFAULT_SERVICE_CATEGORIES
+  const slaColOffset = useMemo(() => {
+    const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isSlaHeader(h))
+    return idx > 0 ? idx - 1 : -1
+  }, [snapshot?.headers])
+  const categoryColOffset = useMemo(() => {
+    const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isServiceCategoryHeader(h))
+    return idx > 0 ? idx - 1 : -1
+  }, [snapshot?.headers])
+  const subCategoryColOffset = useMemo(() => {
+    const idx = (snapshot?.headers ?? []).findIndex((h, i) => i > 0 && isServiceSubCategoryHeader(h))
+    return idx > 0 ? idx - 1 : -1
+  }, [snapshot?.headers])
+  const nowDate = useMemo(() => new Date(nowTick), [nowTick])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowTick(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const getCellDisplayValue = useCallback((row: IncidentRow, colOffset: number): string => {
+    if (colOffset < 0 || colOffset >= row.cells.length) return ''
+    const k = cellKey(row.rowNumber, colOffset + 2)
+    return Object.hasOwn(drafts, k) ? drafts[k] : (row.cells[colOffset] ?? '')
+  }, [drafts])
+
+  const getRowSla = useCallback((row: IncidentRow) => {
+    if (slaColOffset < 0) return null
+    return evaluateSla(getCellDisplayValue(row, slaColOffset), nowDate)
+  }, [getCellDisplayValue, nowDate, slaColOffset])
 
   // Load shared width/hidden state from chrome.storage.local
   useEffect(() => {
@@ -579,6 +617,82 @@ export function IncidentDrawer({ theme, apiCall = callExtensionApi }: IncidentDr
       }
     })
   }, [apiCall, enqueueSave, markFieldSaved, triggerGlobalSavedPulse])
+
+  const saveEditsBatch = useCallback((edits: readonly CellEdit[]): Promise<boolean> => {
+    if (edits.length === 0) return Promise.resolve(true)
+    if (edits.length === 1) {
+      return saveCell(edits[0].rowNumber, edits[0].colIndex, edits[0].value, false)
+    }
+    return enqueueSave(async () => {
+      const snap = snapshotRef.current
+      if (!snap || !snap.activeSheet) return false
+      if (conflictRef.current) return false
+
+      setFieldStatus(prev => {
+        const next = { ...prev }
+        for (const edit of edits) next[cellKey(edit.rowNumber, edit.colIndex)] = 'saving'
+        return next
+      })
+      try {
+        const res = await apiCall<SaveResult>('save-batch', {
+          sheetName: snap.activeSheet,
+          edits,
+          expectedVersion: versionRef.current,
+          forceOverwrite: false,
+        })
+        if (res.saved) {
+          versionRef.current = res.version
+          const editMap = new Map(edits.map(e => [cellKey(e.rowNumber, e.colIndex), e.value]))
+          setSnapshot(prev => {
+            if (!prev) return prev
+            const updatedRows = prev.rows.map(r => {
+              const nextCells = [...r.cells]
+              let touched = false
+              for (let c = 0; c < r.cells.length; c += 1) {
+                const v = editMap.get(cellKey(r.rowNumber, c + 2))
+                if (v !== undefined) {
+                  nextCells[c] = v
+                  touched = true
+                }
+              }
+              return touched ? { ...r, cells: nextCells } : r
+            })
+            return { ...prev, rows: updatedRows, version: res.version }
+          })
+          setDrafts(prev => {
+            const copy = { ...prev }
+            for (const edit of edits) {
+              const k = cellKey(edit.rowNumber, edit.colIndex)
+              if (copy[k] === edit.value) delete copy[k]
+            }
+            return copy
+          })
+          for (const edit of edits) markFieldSaved(cellKey(edit.rowNumber, edit.colIndex))
+          setStale(false)
+          setConflict(false)
+          setBannerError(null)
+          triggerGlobalSavedPulse()
+          return true
+        }
+        if (res.conflict) {
+          setStale(true)
+          setConflict(true)
+        }
+        setFieldStatus(prev => {
+          const next = { ...prev }
+          for (const edit of edits) next[cellKey(edit.rowNumber, edit.colIndex)] = 'error'
+          return next
+        })
+        return false
+      } catch (err) {
+        if (err instanceof BridgeOfflineError) {
+          setBridgeOffline(true)
+        }
+        setBannerError(err instanceof Error ? err.message : '保存失败')
+        return false
+      }
+    })
+  }, [apiCall, enqueueSave, markFieldSaved, saveCell, triggerGlobalSavedPulse])
 
   const handleRefreshClick = useCallback(() => {
     if (hasDirty && !stale) {
@@ -1067,11 +1181,12 @@ export function IncidentDrawer({ theme, apiCall = callExtensionApi }: IncidentDr
           const isExpanded = expandedRow === row.rowNumber
           const isHovered = !isExpanded && hoveredRow === row.rowNumber
           const cardState = isExpanded ? 'expanded' : isHovered ? 'hover' : 'collapsed'
-          const tone = getStatusTone(row)
+          const rowSla = getRowSla(row)
           const rowHasDirty = row.cells.some((cellVal, colOffset) => {
             const k = cellKey(row.rowNumber, colOffset + 2)
             return Object.hasOwn(drafts, k) && drafts[k] !== cellVal
           })
+          const dotTone = rowSla ? rowSla.tone : (rowHasDirty ? 'accent' : getStatusTone(row))
 
           return (
             <div
@@ -1097,11 +1212,12 @@ export function IncidentDrawer({ theme, apiCall = callExtensionApi }: IncidentDr
               <div
                 className="idw-card-head"
                 onClick={() => handleToggleExpand(row.rowNumber)}
-                title={cardState === 'collapsed' ? row.idText : undefined}
+                title={cardState === 'collapsed' ? (rowSla ? `${row.idText}\nSLA: ${rowSla.label}` : row.idText) : undefined}
               >
                 <span
                   className="idw-dot"
-                  data-tone={rowHasDirty ? 'accent' : tone}
+                  data-tone={dotTone}
+                  title={rowSla ? `SLA: ${rowSla.label}` : undefined}
                 />
 
                 {cardState === 'collapsed' ? (
@@ -1114,6 +1230,11 @@ export function IncidentDrawer({ theme, apiCall = callExtensionApi }: IncidentDr
 
                 {isHovered && (
                   <span className="idw-hover-hint">
+                    {rowSla && (
+                      <span className="idw-mini-sla" data-tone={rowSla.tone}>
+                        {rowSla.shortLabel}
+                      </span>
+                    )}
                     {row.hyperlink && <ExternalLinkIcon />}
                     <ChevronDownIcon />
                   </span>
@@ -1142,74 +1263,194 @@ export function IncidentDrawer({ theme, apiCall = callExtensionApi }: IncidentDr
                 <div className="idw-accordion-inner">
                   {isExpanded && (
                     <div className="idw-form">
-                      {row.cells.map((cellValue, colOffset) => {
-                        const colIndex = colOffset + 2
-                        const key = cellKey(row.rowNumber, colIndex)
-                        const headerName = snapshot?.headers[colIndex - 1] ?? `列 ${colIndex}`
-                        const value = Object.hasOwn(drafts, key)
-                          ? drafts[key]
-                          : cellValue
-                        const status = fieldStatus[key]
-                        const errText = fieldErrors[key]
-                        const flash = status === 'saved' || status === 'error' ? status : undefined
+                      {(() => {
+                        const hasCategoryPair = categoryColOffset >= 0 && subCategoryColOffset >= 0
+                        const firstCategoryOffset = hasCategoryPair
+                          ? Math.min(categoryColOffset, subCategoryColOffset)
+                          : -1
+                        const secondCategoryOffset = hasCategoryPair
+                          ? Math.max(categoryColOffset, subCategoryColOffset)
+                          : -1
 
-                        return (
-                          <div key={key} className="idw-field">
-                            <div className="idw-field-head">
-                              <span className="idw-field-label" title={headerName}>
-                                {headerName}
-                              </span>
-                              {status === 'saving' && (
-                                <span className="idw-field-state" data-state="saving">保存中...</span>
-                              )}
-                              {status === 'saved' && (
-                                <span className="idw-field-state" data-state="saved">已保存</span>
+                        const renderCategoryDropdown = (offset: number, isParent: boolean) => {
+                          const colIndex = offset + 2
+                          const key = cellKey(row.rowNumber, colIndex)
+                          const headerName = snapshot?.headers[colIndex - 1] ?? (isParent ? '服务分类' : '服务子分类')
+                          const value = getCellDisplayValue(row, offset)
+                          const status = fieldStatus[key]
+                          const errText = fieldErrors[key]
+                          const flash = status === 'saved' || status === 'error' ? status : undefined
+
+                          const parentValue = categoryColOffset >= 0 ? getCellDisplayValue(row, categoryColOffset).trim() : ''
+                          const baseOptions = isParent
+                            ? Object.keys(categoryOptions)
+                            : (parentValue ? (categoryOptions[parentValue] ?? []) : [])
+                          const optionList =
+                            value.trim() !== '' && !baseOptions.includes(value.trim())
+                              ? [value.trim(), ...baseOptions]
+                              : baseOptions
+
+                          return (
+                            <div key={key} className="idw-field">
+                              <div className="idw-field-head">
+                                <span className="idw-field-label" title={headerName}>
+                                  {headerName}
+                                </span>
+                                {status === 'saving' && (
+                                  <span className="idw-field-state" data-state="saving">保存中...</span>
+                                )}
+                                {status === 'saved' && (
+                                  <span className="idw-field-state" data-state="saved">已保存</span>
+                                )}
+                              </div>
+
+                              <select
+                                className="idw-select"
+                                aria-label={headerName}
+                                data-flash={flash}
+                                disabled={!isParent && !parentValue}
+                                value={value.trim()}
+                                onChange={(e) => {
+                                  const nextVal = e.target.value
+                                  if (isParent) {
+                                    const nextSubs = categoryOptions[nextVal] ?? []
+                                    const subColIdx = subCategoryColOffset + 2
+                                    const subKey = cellKey(row.rowNumber, subColIdx)
+                                    const curSub = subCategoryColOffset >= 0 ? getCellDisplayValue(row, subCategoryColOffset).trim() : ''
+                                    const resetSub = subCategoryColOffset >= 0 && curSub !== '' && !nextSubs.includes(curSub)
+
+                                    setDrafts(prev => ({
+                                      ...prev,
+                                      [key]: nextVal,
+                                      ...(resetSub ? { [subKey]: '' } : {}),
+                                    }))
+
+                                    const edits: CellEdit[] = [{ rowNumber: row.rowNumber, colIndex, value: nextVal }]
+                                    if (resetSub) {
+                                      edits.push({ rowNumber: row.rowNumber, colIndex: subColIdx, value: '' })
+                                    }
+                                    void saveEditsBatch(edits)
+                                  } else {
+                                    setDrafts(prev => ({ ...prev, [key]: nextVal }))
+                                    void saveCell(row.rowNumber, colIndex, nextVal, false)
+                                  }
+                                }}
+                              >
+                                <option value="">
+                                  {isParent ? '选择服务分类...' : parentValue ? '选择服务子分类...' : '请先选服务分类'}
+                                </option>
+                                {optionList.map(opt => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </select>
+
+                              {errText && (
+                                <div className="idw-field-error">
+                                  <span>{errText}</span>
+                                  <button
+                                    type="button"
+                                    className="idw-retry-link"
+                                    onClick={() => void saveCell(row.rowNumber, colIndex, value, conflict)}
+                                  >
+                                    {conflict ? '强制覆盖' : '重试'}
+                                  </button>
+                                </div>
                               )}
                             </div>
+                          )
+                        }
 
-                            <AutoTextarea
-                              ariaLabel={headerName}
-                              value={value}
-                              flash={flash}
-                              placeholder={`输入${headerName}...`}
-                              onChange={(nextVal) => {
-                                setDrafts(prev => ({ ...prev, [key]: nextVal }))
-                                if (fieldStatus[key] === 'error') {
-                                  setFieldStatus(prev => {
-                                    const copy = { ...prev }
-                                    delete copy[key]
-                                    return copy
-                                  })
-                                }
-                              }}
-                              onBlur={(currentVal) => {
-                                void saveCell(row.rowNumber, colIndex, currentVal, false)
-                              }}
-                              onKeyDown={(e) => {
-                                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-                                  e.preventDefault()
-                                  void saveCell(row.rowNumber, colIndex, e.currentTarget.value, false)
-                                } else if (e.key === 'Escape') {
-                                  e.currentTarget.blur()
-                                }
-                              }}
-                            />
-
-                            {errText && (
-                              <div className="idw-field-error">
-                                <span>{errText}</span>
-                                <button
-                                  type="button"
-                                  className="idw-retry-link"
-                                  onClick={() => void saveCell(row.rowNumber, colIndex, value, conflict)}
-                                >
-                                  {conflict ? '强制覆盖' : '重试'}
-                                </button>
+                        return row.cells.map((cellValue, colOffset) => {
+                          if (hasCategoryPair && colOffset === secondCategoryOffset) {
+                            return null
+                          }
+                          if (hasCategoryPair && colOffset === firstCategoryOffset) {
+                            return (
+                              <div key={`cat-pair-${row.rowNumber}`} className="idw-field-pair">
+                                {renderCategoryDropdown(categoryColOffset, true)}
+                                {renderCategoryDropdown(subCategoryColOffset, false)}
                               </div>
-                            )}
-                          </div>
-                        )
-                      })}
+                            )
+                          }
+
+                          const colIndex = colOffset + 2
+                          const key = cellKey(row.rowNumber, colIndex)
+                          const headerName = snapshot?.headers[colIndex - 1] ?? `列 ${colIndex}`
+                          const value = Object.hasOwn(drafts, key)
+                            ? drafts[key]
+                            : cellValue
+                          const status = fieldStatus[key]
+                          const errText = fieldErrors[key]
+                          const flash = status === 'saved' || status === 'error' ? status : undefined
+                          const cellSla = colOffset === slaColOffset ? evaluateSla(value, nowDate) : null
+
+                          return (
+                            <div key={key} className="idw-field">
+                              <div className="idw-field-head">
+                                <span className="idw-field-label" title={headerName}>
+                                  {headerName}
+                                </span>
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                  {cellSla && (
+                                    <span className="idw-sla-pill" data-tone={cellSla.tone}>
+                                      {cellSla.label}
+                                    </span>
+                                  )}
+                                  {status === 'saving' && (
+                                    <span className="idw-field-state" data-state="saving">保存中...</span>
+                                  )}
+                                  {status === 'saved' && (
+                                    <span className="idw-field-state" data-state="saved">已保存</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <AutoTextarea
+                                ariaLabel={headerName}
+                                value={value}
+                                flash={flash}
+                                placeholder={`输入${headerName}...`}
+                                onChange={(nextVal) => {
+                                  setDrafts(prev => ({ ...prev, [key]: nextVal }))
+                                  if (fieldStatus[key] === 'error') {
+                                    setFieldStatus(prev => {
+                                      const copy = { ...prev }
+                                      delete copy[key]
+                                      return copy
+                                    })
+                                  }
+                                }}
+                                onBlur={(currentVal) => {
+                                  void saveCell(row.rowNumber, colIndex, currentVal, false)
+                                }}
+                                onKeyDown={(e) => {
+                                  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                                    e.preventDefault()
+                                    void saveCell(row.rowNumber, colIndex, e.currentTarget.value, false)
+                                  } else if (e.key === 'Escape') {
+                                    e.currentTarget.blur()
+                                  }
+                                }}
+                              />
+
+                              {errText && (
+                                <div className="idw-field-error">
+                                  <span>{errText}</span>
+                                  <button
+                                    type="button"
+                                    className="idw-retry-link"
+                                    onClick={() => void saveCell(row.rowNumber, colIndex, value, conflict)}
+                                  >
+                                    {conflict ? '强制覆盖' : '重试'}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })
+                      })()}
                     </div>
                   )}
                 </div>
