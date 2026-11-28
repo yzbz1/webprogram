@@ -3,15 +3,25 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  abortActiveMtpTransfer,
+  browseFolder,
+  createDirectory,
+  getMtpStorageInfo,
+  listMtpDevices,
+  parseMtpPath,
+  runPowerShellUtf8,
+  transferFileToMtp,
+} from './mtpHelper.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3005);
-const CONFIG_PATH = path.join(__dirname, 'config.json');
-const AUDIT_LOG_PATH = path.join(__dirname, 'transfer.log.jsonl');
+const DATA_DIR = process.env.SAFEMOVER_DATA_DIR || __dirname;
+const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
+const AUDIT_LOG_PATH = path.join(DATA_DIR, 'transfer.log.jsonl');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const PART_SUFFIX = '.safemove.part';
 
@@ -46,8 +56,10 @@ const DEFAULT_CONFIG = {
   reserveSpaceMB: 1024,
   // Poll interval when waiting for space or reconnect (seconds)
   pollIntervalSec: 4,
-  // Read-back SHA-256 verification before deleting source
+  // Read-back SHA-256 verification before deleting source (drive targets)
   verifySha256: true,
+  // Optional read-back SHA-256 verification for MTP phone targets (doubles USB traffic when true)
+  mtpReadbackVerify: false,
   // File selection strategy: 'oldest' | 'smallest' | 'largest' | 'name'
   sortOrder: 'oldest',
   // Smart fit: if next file is larger than free space, try smaller files that fit!
@@ -102,6 +114,7 @@ const state = {
   // 'idle' | 'scanning' | 'waiting_space' | 'copying' | 'syncing' | 'verifying' | 'cooldown' | 'disconnected' | 'paused'
   phase: 'idle',
   running: false,
+  stopPending: false,
   paused: false,
   statusText: '已就绪，请配置源文件夹与移动设备目录后启动',
   currentFile: null, // { relPath, size, copiedBytes, verifiedBytes, speedMBs, percent, phase }
@@ -178,33 +191,9 @@ function formatBytes(bytes) {
 }
 
 /**
- * Execute PowerShell with guaranteed UTF-8 stdout and UTF-16LE EncodedCommand
- * (prevents GBK/CP936 mojibake on Chinese Windows drive labels and folder paths).
+ * Query Windows Logical Disks via PowerShell CIM (DriveType 2 = Removable, 3 = Local/USB HDD)
  */
-function runPowerShellUtf8(script, { sta = false, timeout = 10000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const wrapped = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\r\n$OutputEncoding = [System.Text.Encoding]::UTF8\r\n${script}`;
-    const encoded = Buffer.from(wrapped, 'utf16le').toString('base64');
-    const args = ['-NoProfile', '-NonInteractive'];
-    if (sta) args.push('-STA');
-    args.push('-EncodedCommand', encoded);
-    execFile(
-      'powershell.exe',
-      args,
-      { timeout, windowsHide: true, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
-      (err, stdout) => {
-        if (err) reject(err);
-        else resolve(String(stdout || ''));
-      }
-    );
-  });
-}
-
-/**
- * Query Windows Logical Disks via PowerShell CIM (gives DriveType, VolumeName, FreeSpace, Size)
- * DriveType: 2 = Removable (USB Flash / SD Card), 3 = Local / USB External HDD
- */
-async function queryWindowsDrives() {
+async function queryLogicalDisks() {
   const psCmd =
     'Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DriveType -in 2,3 } | Select-Object DeviceID, VolumeName, DriveType, Size, FreeSpace, FileSystem | ConvertTo-Json -Compress';
   try {
@@ -215,6 +204,7 @@ async function queryWindowsDrives() {
     return arr
       .filter((d) => d && d.DeviceID)
       .map((d) => ({
+        isMtp: false,
         letter: String(d.DeviceID).toUpperCase(),
         label: String(d.VolumeName || '').trim(),
         driveType: Number(d.DriveType),
@@ -233,8 +223,20 @@ async function queryWindowsDrives() {
   }
 }
 
-/** Native Windows Folder Browser Dialog via PowerShell */
+/**
+ * Query both Windows MTP portable devices (phones) and logical disks.
+ */
+async function queryWindowsDrives() {
+  const [mtpList, diskList] = await Promise.all([listMtpDevices(), queryLogicalDisks()]);
+  return [...mtpList, ...diskList];
+}
+
+let pickInFlight = false;
+
+/** Native Windows Folder Browser Dialog via PowerShell (with concurrency lock & foreground focus) */
 async function pickWindowsFolder(initialDir = '') {
+  if (pickInFlight) return null;
+  pickInFlight = true;
   const safeInit = String(initialDir || '').replace(/'/g, "''");
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -243,7 +245,13 @@ $dlg.Description = '选择文件夹'
 $dlg.ShowNewFolderButton = $true
 if ('${safeInit}' -and (Test-Path -LiteralPath '${safeInit}')) { $dlg.SelectedPath = '${safeInit}' }
 $owner = New-Object System.Windows.Forms.Form
+$owner.StartPosition = 'CenterScreen'
+$owner.Size = New-Object System.Drawing.Size(1, 1)
 $owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.Show()
+$owner.Activate()
+$owner.Hide()
 $res = $dlg.ShowDialog($owner)
 $owner.Dispose()
 if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.SelectedPath }
@@ -253,6 +261,8 @@ if ($res -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dlg.Select
     return stdout.trim() || null;
   } catch {
     return null;
+  } finally {
+    pickInFlight = false;
   }
 }
 
@@ -275,7 +285,7 @@ async function getCachedDrives(force = false) {
   if (!force && Date.now() - cachedDrivesAt < 5000 && cachedDrives.length > 0) {
     return cachedDrives;
   }
-  const list = await queryWindowsDrives();
+  const list = await queryLogicalDisks();
   if (list.length > 0) {
     cachedDrives = list;
     cachedDrivesAt = Date.now();
@@ -286,6 +296,13 @@ async function getCachedDrives(force = false) {
 async function getTargetDriveInfo() {
   const targetDir = config.targetDir.trim();
   if (!targetDir) return null;
+
+  // MTP device target (e.g. 此电脑\Pixel\内部共享存储空间\DCIM\Camera)
+  const mtpTarget = parseMtpPath(targetDir);
+  if (mtpTarget) {
+    return await getMtpStorageInfo(mtpTarget);
+  }
+
   const letter = getDriveLetterFromPath(targetDir);
   if (!letter) return null;
 
@@ -479,6 +496,14 @@ async function computeFileSha256(filePath, totalSize, onProgress) {
 
 function isLikelyDisconnectError(err) {
   const code = String(err?.code || '');
+  const msg = String(err?.message || '');
+  if (
+    msg.includes('MTP_DISCONNECTED') ||
+    msg.includes('MTP_VERIFY_TIMEOUT') ||
+    msg.includes('MTP_READBACK_TIMEOUT')
+  ) {
+    return true;
+  }
   return ['EIO', 'ENODEV', 'ENOENT', 'EBUSY', 'EPERM', 'UNKNOWN', 'EINVAL', 'ENXIO'].includes(code);
 }
 
@@ -515,6 +540,90 @@ async function resolveFinalTargetPath(desiredPath, srcSize, srcHash) {
  * 5. Delete / Recycle / Keep source ONLY AFTER 100% verification
  */
 async function safeTransferOneFile(fileItem) {
+  const mtpTarget = parseMtpPath(config.targetDir);
+  if (mtpTarget) {
+    state.phase = 'copying';
+    state.statusText = `正在通过 MTP 安全写入手机：${mtpTarget.deviceName}`;
+    state.currentFile = {
+      relPath: fileItem.relPath,
+      size: fileItem.size,
+      copiedBytes: 0,
+      verifiedBytes: 0,
+      speedMBs: 0,
+      percent: 0,
+      phase: 'copying',
+    };
+    broadcastState(true);
+
+    const srcHash = config.mtpReadbackVerify
+      ? await computeFileSha256(fileItem.fullPath, fileItem.size)
+      : '';
+    const relSubDirs = config.preserveTree
+      ? path.dirname(fileItem.relPath).split(/[\\/]+/).filter((s) => s && s !== '.')
+      : [];
+
+    const mtpRes = await transferFileToMtp({
+      srcFullPath: fileItem.fullPath,
+      fileName: path.basename(fileItem.fullPath),
+      fileSize: fileItem.size,
+      mtpTarget,
+      relSubDirs,
+      verifyReadback: Boolean(config.mtpReadbackVerify),
+      srcSha256: srcHash,
+      onProgress: (bytes) => {
+        if (!state.currentFile) return;
+        state.currentFile.copiedBytes = bytes;
+        state.currentFile.percent =
+          fileItem.size > 0 ? Math.min(100, Math.round((bytes / fileItem.size) * 100)) : 100;
+        broadcastState();
+      },
+      onPhaseChange: (p) => {
+        if (!state.currentFile) return;
+        state.phase = p;
+        state.currentFile.phase = p;
+        state.statusText =
+          p === 'verifying'
+            ? '正在从手机回拷校验 SHA-256...'
+            : '正在通过 MTP 安全写入手机并核对 64 位字节长度...';
+        broadcastState(true);
+      },
+    });
+
+    if (config.deleteMode === 'delete') {
+      await fsp.unlink(fileItem.fullPath);
+      if (config.cleanEmptyDirs) {
+        await cleanEmptyParentDirs(fileItem.fullPath, config.sourceDir);
+      }
+    } else if (config.deleteMode === 'recycle') {
+      await sendToRecycleBin(fileItem.fullPath);
+      if (config.cleanEmptyDirs) {
+        await cleanEmptyParentDirs(fileItem.fullPath, config.sourceDir);
+      }
+    } else {
+      keepModeDoneSet.add(fileItem.fullPath);
+    }
+
+    state.sessionStats.movedFiles++;
+    state.sessionStats.movedBytes += fileItem.size;
+    appendAuditLog({
+      file: fileItem.relPath,
+      size: fileItem.size,
+      sha256: srcHash || 'mtp-size-verified',
+      dest: mtpRes.destDisplayPath,
+      deleteMode: config.deleteMode,
+      transport: 'mtp',
+    });
+
+    const actionTag =
+      config.deleteMode === 'delete'
+        ? 'MTP 校验并删源'
+        : config.deleteMode === 'recycle'
+          ? 'MTP 校验并移回收站'
+          : 'MTP 演练保留源';
+    pushLog('ok', `完成：${fileItem.relPath} (${formatBytes(fileItem.size)}) · ${actionTag}`);
+    return;
+  }
+
   const targetBase = config.targetDir;
   const desiredDest = config.preserveTree
     ? path.join(targetBase, fileItem.relPath)
@@ -753,12 +862,14 @@ async function runWorkerLoop() {
         wasDisconnected = false;
         state.sessionStats.disconnectRecoveries++;
         state.phase = 'cooldown';
-        pushLog('info', `移动设备 ${drive.letter} 已重新上线！等待 5 秒稳定并清理残余临时文件...`);
+        pushLog('info', `移动设备 ${drive.label || drive.letter} 已重新上线！等待 5 秒稳定...`);
         await interruptibleSleep(5000, '设备重连稳定中');
         if (stopRequested) break;
-        const cleaned = await cleanupStalePartFiles(config.targetDir);
-        if (cleaned > 0) {
-          pushLog('info', `已自动清理 ${cleaned} 个上次掉盘遗留的 .part 残缺文件`);
+        if (!drive.isMtp) {
+          const cleaned = await cleanupStalePartFiles(config.targetDir);
+          if (cleaned > 0) {
+            pushLog('info', `已自动清理 ${cleaned} 个上次掉盘遗留的 .part 残缺文件`);
+          }
         }
         bytesSinceBatchRest = 0;
       }
@@ -821,7 +932,8 @@ async function runWorkerLoop() {
       const batchBytesThreshold = Number(config.batchCooldownMB || 0) * 1024 * 1024;
       if (batchBytesThreshold > 0 && bytesSinceBatchRest >= batchBytesThreshold) {
         bytesSinceBatchRest = 0;
-        const restSec = Math.max(1, Number(config.batchCooldownSec || 5));
+        const baseRestSec = Math.max(1, Number(config.batchCooldownSec || 5));
+        const restSec = drive.isMtp ? Math.max(8, baseRestSec) : baseRestSec;
         state.phase = 'cooldown';
         pushLog('info', `已连续写入 ${config.batchCooldownMB}MB，执行深度降温歇息 ${restSec} 秒保护老旧主控...`);
         await interruptibleSleep(restSec * 1000, '主控深度散热歇息中');
@@ -854,6 +966,7 @@ async function runWorkerLoop() {
   }
 
   state.running = false;
+  state.stopPending = false;
   state.currentFile = null;
   state.phase = 'idle';
   state.statusText = '搬运任务已停止';
@@ -866,10 +979,15 @@ function startWorker() {
   if (!config.sourceDir || !config.targetDir) {
     return { ok: false, error: '请先设置 PC 源文件夹和移动设备目标文件夹' };
   }
-  if (path.resolve(config.sourceDir).toLowerCase() === path.resolve(config.targetDir).toLowerCase()) {
+  const targetIsMtp = Boolean(parseMtpPath(config.targetDir));
+  if (
+    !targetIsMtp &&
+    path.resolve(config.sourceDir).toLowerCase() === path.resolve(config.targetDir).toLowerCase()
+  ) {
     return { ok: false, error: '源文件夹和目标文件夹不能相同！' };
   }
   stopRequested = false;
+  state.stopPending = false;
   state.running = true;
   state.sessionStats.startedAt = new Date().toISOString();
   keepModeDoneSet.clear();
@@ -880,15 +998,25 @@ function startWorker() {
   return { ok: true };
 }
 
-async function stopWorker() {
-  if (!state.running) return { ok: true };
+async function stopWorker(force = false) {
+  if (!state.running) return { ok: true, stopping: false };
   stopRequested = true;
-  state.statusText = '正在安全中断当前块并清理临时文件...';
-  broadcastState(true);
-  if (workerPromise) {
-    await workerPromise;
+  state.stopPending = true;
+
+  if (force) {
+    abortActiveMtpTransfer();
+    state.statusText = '已强制中断当前传输（PC 源文件完好保留）';
+    pushLog('warn', '⏹ 用户已触发强制中断，当前未完成的传输已取消，PC 源文件完好未删');
+    broadcastState(true);
+  } else {
+    state.statusText = '正在等待当前文件安全落盘后停止（如 MTP 卡住可点「强制中断」）';
+    broadcastState(true);
   }
-  return { ok: true };
+
+  if (workerPromise) {
+    await Promise.race([workerPromise, sleep(1200)]);
+  }
+  return { ok: true, stopping: state.running };
 }
 
 function sendJson(res, status, data) {
@@ -936,14 +1064,31 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // List all connected Windows drives
+    // List all connected Windows drives & MTP devices
     if (pathname === '/api/drives' && req.method === 'GET') {
       const drives = await queryWindowsDrives();
       sendJson(res, 200, { drives });
       return;
     }
 
-    // Native Windows folder picker
+    // Fast in-app folder browser (supports 此电脑, local drives, and MTP phones!)
+    if (pathname === '/api/browse' && req.method === 'GET') {
+      const targetPath = url.searchParams.get('path') || '';
+      const logical = !targetPath || targetPath === '此电脑' ? await queryLogicalDisks() : [];
+      const listing = await browseFolder(targetPath, logical);
+      sendJson(res, 200, { ok: true, ...listing });
+      return;
+    }
+
+    // Create subfolder inside local drive or MTP phone
+    if (pathname === '/api/mkdir' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const created = await createDirectory(body.parentPath || '', body.name || '');
+      sendJson(res, 200, { ok: true, path: created });
+      return;
+    }
+
+    // Native Windows folder picker (fallback with concurrency lock)
     if (pathname === '/api/pick-folder' && req.method === 'POST') {
       const body = await readJsonBody(req);
       const selected = await pickWindowsFolder(body.initialDir || '');
@@ -996,10 +1141,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // Stop worker
+    // Stop worker (supports { force: true } to abort a hung MTP subprocess immediately)
     if (pathname === '/api/stop' && req.method === 'POST') {
-      await stopWorker();
-      sendJson(res, 200, { ok: true });
+      const body = await readJsonBody(req).catch(() => ({}));
+      const resStop = await stopWorker(Boolean(body?.force));
+      sendJson(res, 200, resStop);
       return;
     }
 

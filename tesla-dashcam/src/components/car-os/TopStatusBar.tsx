@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bluetooth, HardDrive, Lock, Unlock, User, Wifi, Signal } from 'lucide-react';
+import { Bluetooth, Gamepad2, HardDrive, Lock, Unlock, User, Wifi, Signal } from 'lucide-react';
 import { CarOsState } from '../../types/dashcam';
 import {
   TeslaBatteryIcon,
@@ -11,6 +11,7 @@ interface TopStatusBarProps {
   carState: CarOsState;
   usbLoaded: boolean;
   usbClipCount: number;
+  gamepadConnected?: boolean;
   onToggleBatteryUnit: () => void;
   onToggleLock: () => void;
   onToggleSentry: () => void;
@@ -22,6 +23,7 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
   carState,
   usbLoaded,
   usbClipCount,
+  gamepadConnected = false,
   onToggleBatteryUnit,
   onToggleLock,
   onToggleSentry,
@@ -138,8 +140,18 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
 
         <div className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[12px]" style={{ color: 'var(--tesla-text-secondary)' }}>
           <User className="w-3.5 h-3.5" />
-          <span>Model 3</span>
+          <span>Model Y</span>
         </div>
+
+        {gamepadConnected && (
+          <span
+            title="游戏手柄已连接"
+            className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[11px] font-medium"
+          >
+            <Gamepad2 className="w-3.5 h-3.5" />
+            <span>手柄</span>
+          </span>
+        )}
 
         <span className="font-medium tabular-nums text-[13px]">{timeStr}</span>
         <span

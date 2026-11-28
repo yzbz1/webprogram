@@ -1,0 +1,28 @@
+{
+  "name": "win-incident-stage",
+  "version": "1.0.0",
+  "description": "Windows iPadOS Stage Manager 3D floating incident ticket workspace sharing Excel and config with DSH and Chrome",
+  "private": true,
+  "main": "dist-app/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test-stage.mjs",
+    "start": "electron .",
+    "pack:portable": "node scripts/pack-portable.mjs"
+  },
+  "dependencies": {
+    "koffi": "^3.3.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "electron": "^35.0.0",
+    "esbuild": "^0.25.0",
+    "exceljs": "^4.4.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "typescript": "^5.7.0"
+  }
+}

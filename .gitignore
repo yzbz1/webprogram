@@ -1,6 +1,7 @@
 # Dependencies & build outputs
 node_modules/
 dist/
+release/
 *.tsbuildinfo
 
 # Logs & local runtime state

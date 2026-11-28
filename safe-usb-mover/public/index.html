@@ -13,6 +13,7 @@
       --text: #eef2f7;
       --muted: #8b95a7;
       --blue: #3b82f6;
+      --cyan: #06b6d4;
       --green: #10b981;
       --amber: #f59e0b;
       --red: #ef4444;
@@ -40,7 +41,8 @@
     .brand h1 { font-size: 19px; font-weight: 700; letter-spacing: -0.2px; }
     .brand p { font-size: 12px; color: var(--muted); }
     .badge {
-      display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; border-radius: 999px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      padding: 7px 14px; min-width: 152px; border-radius: 999px; box-sizing: border-box;
       font-size: 13px; font-weight: 600; background: var(--elev); border: 1px solid var(--border);
     }
     .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
@@ -81,12 +83,14 @@
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
     .btn-primary { background: var(--blue); border-color: transparent; color: #fff; }
     .btn-primary:hover { background: #2563eb; }
+    .btn-success { background: var(--green); border-color: transparent; color: #042f1c; }
+    .btn-success:hover { background: #34d399; }
     .btn-danger { background: rgba(239, 68, 68, 0.16); border-color: rgba(239, 68, 68, 0.4); color: #fca5a5; }
     .btn-danger:hover { background: rgba(239, 68, 68, 0.28); }
     .btn-lg { padding: 12px 24px; font-size: 14px; border-radius: 12px; }
 
     /* Drives list */
-    .drives-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(175px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .drives-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(185px, 1fr)); gap: 10px; margin-bottom: 14px; }
     .drive-chip {
       background: var(--elev); border: 1px solid var(--border); border-radius: 12px;
       padding: 10px 12px; cursor: pointer; transition: all .15s; text-align: left; color: var(--text);
@@ -94,12 +98,22 @@
     .drive-chip:hover { border-color: rgba(59,130,246,0.55); transform: translateY(-1px); }
     .drive-chip.selected { border-color: var(--blue); background: rgba(59,130,246,0.14); }
     .drive-chip.removable { border-left: 3px solid var(--green); }
-    .drive-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; }
-    .drive-type { font-size: 10px; padding: 2px 6px; border-radius: 999px; background: rgba(16,185,129,0.15); color: #34d399; }
+    .drive-chip.mtp { border-left: 3px solid var(--cyan); background: rgba(6, 182, 212, 0.08); }
+    .drive-chip.mtp.selected { border-color: var(--cyan); background: rgba(6, 182, 212, 0.18); }
+    .drive-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 700; gap: 6px; }
+    .drive-head span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .drive-type { font-size: 10px; padding: 2px 6px; border-radius: 999px; background: rgba(16,185,129,0.15); color: #34d399; flex-shrink: 0; }
+    .drive-type.mtp { background: rgba(6, 182, 212, 0.2); color: #22d3ee; }
     .drive-type.local { background: rgba(148,163,184,0.15); color: #94a3b8; }
     .drive-bar { height: 5px; background: rgba(255,255,255,0.09); border-radius: 999px; overflow: hidden; margin: 7px 0 5px; }
     .drive-bar-fill { height: 100%; background: var(--blue); border-radius: 999px; }
     .drive-meta { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+    .mtp-banner {
+      margin-top: 8px; padding: 8px 12px; border-radius: 10px; font-size: 12px;
+      background: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.35);
+      color: #67e8f9; display: none;
+    }
 
     /* Presets */
     .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
@@ -116,19 +130,30 @@
       display: flex; align-items: center; justify-content: space-between; gap: 10px;
       padding: 9px 12px; background: var(--elev); border-radius: 10px; font-size: 12.5px; cursor: pointer;
     }
-    .check-row input { width: 16px; height: 16px; accent-color: var(--blue); }
+    .check-row input { width: 16px; height: 16px; accent-color: var(--blue); flex-shrink: 0; }
 
     /* Live Monitor */
     .status-banner {
-      padding: 14px 16px; border-radius: 12px; background: var(--elev); border: 1px solid var(--border);
-      margin-bottom: 14px;
+      height: 132px; box-sizing: border-box; padding: 13px 16px; border-radius: 12px;
+      background: var(--elev); border: 1px solid var(--border); margin-bottom: 14px;
+      display: flex; flex-direction: column; justify-content: space-between; overflow: hidden;
     }
     .status-banner.disconnected { border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.1); }
     .status-banner.copying { border-color: rgba(59,130,246,0.5); background: rgba(59,130,246,0.1); }
     .status-banner.verifying { border-color: rgba(16,185,129,0.5); background: rgba(16,185,129,0.1); }
     .status-banner.cooldown { border-color: rgba(245,158,11,0.45); background: rgba(245,158,11,0.09); }
+    .status-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+    .status-text {
+      font-size: 13.5px; font-weight: 700; line-height: 18px; min-height: 36px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .status-speed {
+      font-size: 12px; color: #60a5fa; font-variant-numeric: tabular-nums;
+      white-space: nowrap; flex-shrink: 0; line-height: 18px;
+    }
+    .current-file-area { transition: opacity .15s ease; }
 
-    .progress-track { height: 9px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; margin: 10px 0 6px; }
+    .progress-track { height: 8px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; margin: 8px 0 6px; }
     .progress-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width .18s linear; border-radius: 999px; }
 
     .stats-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
@@ -153,6 +178,52 @@
       background: rgba(59,130,246,0.09); border: 1px solid rgba(59,130,246,0.2);
       padding: 9px 12px; border-radius: 10px; margin-bottom: 14px;
     }
+
+    /* Instant Folder Browser Modal */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center; padding: 16px; z-index: 100;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: 100%; max-width: 680px; background: var(--card); border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 18px; overflow: hidden; box-shadow: 0 28px 80px rgba(0,0,0,0.75);
+      display: flex; flex-direction: column; max-height: 84vh;
+    }
+    .modal-head {
+      padding: 14px 18px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .modal-head h2 { font-size: 15px; font-weight: 700; }
+    .modal-nav {
+      padding: 10px 18px; background: var(--elev); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .crumbs {
+      flex: 1; min-width: 180px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+      font-size: 12px; color: var(--muted);
+    }
+    .crumb {
+      padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,0.06); color: var(--text);
+      cursor: pointer; border: none; font-size: 12px;
+    }
+    .crumb:hover { background: rgba(59,130,246,0.25); }
+    .modal-list {
+      flex: 1; overflow-y: auto; padding: 10px 14px; min-height: 260px;
+    }
+    .folder-row {
+      width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 10px 12px; border-radius: 10px; border: 1px solid transparent; background: transparent;
+      color: var(--text); cursor: pointer; text-align: left; font-size: 13px;
+    }
+    .folder-row:hover { background: var(--elev); border-color: var(--border); }
+    .folder-row-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .folder-row-left span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .folder-row-meta { font-size: 11px; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+    .modal-foot {
+      padding: 12px 18px; border-top: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+    }
   </style>
 </head>
 <body>
@@ -162,7 +233,7 @@
         <div class="logo">🛡️</div>
         <div>
           <h1>SafeMover · 防掉盘渐进式安全搬运助手</h1>
-          <p>专为老旧移动硬盘 / U 盘设计：有空间就一点点搬 · 限速散热防掉盘 · 落盘回读 SHA-256 校验通过才删源</p>
+          <p>支持 U 盘 / 移动硬盘 / 📱 MTP 手机直连（如 Pixel）：有空间就一点点搬 · 冷却防掉盘 · 核验后才删源</p>
         </div>
       </div>
       <div style="display:flex; align-items:center; gap:10px;">
@@ -171,7 +242,8 @@
           <span id="phaseLabel">待机中</span>
         </div>
         <button class="btn btn-primary btn-lg" id="btnStart" onclick="startTask()">▶ 启动自动监控搬运</button>
-        <button class="btn btn-danger btn-lg" id="btnStop" onclick="stopTask()" style="display:none;">⏹ 安全停止</button>
+        <button class="btn btn-danger btn-lg" id="btnStop" onclick="stopTask(false)" style="display:none;">⏹ 安全停止</button>
+        <button class="btn btn-danger btn-lg" id="btnForceStop" onclick="stopTask(true)" style="display:none; background:rgba(239,68,68,0.32);">⚡ 强制中断</button>
       </div>
     </header>
 
@@ -181,29 +253,32 @@
         <div class="card">
           <div class="card-title">
             <span>1. 选择 PC 源文件夹与移动设备目标</span>
-            <button class="btn" style="padding:5px 10px; font-size:12px;" onclick="loadDrives()">🔄 刷新磁盘列表</button>
+            <button class="btn" id="btnRefreshDrives" style="padding:5px 10px; font-size:12px;" onclick="loadDrives()">🔄 刷新设备与磁盘</button>
           </div>
 
           <div class="field">
             <label>PC 源文件夹（待搬出文件的目录）</label>
             <div class="input-row">
               <input type="text" id="sourceDir" placeholder="例如：D:\Downloads\待转移" onchange="saveFields()" />
-              <button class="btn" onclick="pickFolder('sourceDir')">📂 浏览</button>
+              <button class="btn" onclick="openFolderBrowser('sourceDir')">📂 浏览</button>
             </div>
           </div>
 
           <div class="field">
-            <label>快捷选择已连接的磁盘（绿色边框为可移动 U 盘 / SD 卡，点击自动填入）</label>
+            <label>快捷选择已连接设备（青色为 MTP 手机，绿色为可移动 U 盘 / SD 卡，点击自动填入）</label>
             <div class="drives-grid" id="drivesGrid">
-              <div style="font-size:12px;color:var(--muted);">正在扫描磁盘...</div>
+              <div style="font-size:12px;color:var(--muted);">正在扫描磁盘与便携设备...</div>
             </div>
           </div>
 
           <div class="field" style="margin-bottom:0;">
-            <label>移动设备目标文件夹（会自动按卷标追踪，掉盘换盘符也能认出）</label>
+            <label>移动设备目标文件夹（支持盘符路径，或手机路径如 此电脑\Pixel\内部共享存储空间\DCIM\Camera）</label>
             <div class="input-row">
-              <input type="text" id="targetDir" placeholder="例如：E:\Backup" onchange="saveFields()" />
-              <button class="btn" onclick="pickFolder('targetDir')">📂 浏览</button>
+              <input type="text" id="targetDir" placeholder="例如：E:\Backup 或 此电脑\Pixel\内部共享存储空间\DCIM\Camera" onchange="saveFields()" />
+              <button class="btn" onclick="openFolderBrowser('targetDir')">📂 浏览</button>
+            </div>
+            <div class="mtp-banner" id="mtpBanner">
+              📱 已识别为 <strong>MTP 手机直连模式</strong>：逐个单文件串行传输 + 64位字节二次提交核验 + 散热歇息保护，无需安装 ADB。
             </div>
           </div>
         </div>
@@ -215,7 +290,7 @@
           </div>
 
           <div class="shield-steps">
-            <span>① 检测余量</span> → <span>② 限速写 .part 临时文件</span> → <span>③ fsync 强制落盘</span> → <span>④ 回读 SHA-256 校验</span> → <span>⑤ 原子改名后再删 PC 源</span>
+            <span>① 检测余量</span> → <span>② 平稳写临时/串行写入</span> → <span>③ 落盘提交</span> → <span>④ 字节/SHA-256 核验</span> → <span>⑤ 确认后才删 PC 源</span>
           </div>
 
           <div class="presets">
@@ -229,17 +304,17 @@
             </button>
             <button class="preset-btn" id="preset-fast" onclick="applyPreset('fast')">
               <strong>🚀 高速校验</strong>
-              <span>不限速 · 仅保留 SHA-256 校验</span>
+              <span>不限速 · 仅保留完整校验</span>
             </button>
           </div>
 
           <div class="params-grid">
             <div class="field">
-              <label>写入限速 (MB/s，0 为不限速，老盘建议 8~15)</label>
+              <label>磁盘写入限速 (MB/s，0 不限速，老盘建议 8~15)</label>
               <input type="number" id="speedLimitMBs" min="0" max="500" step="1" onchange="saveFields('custom')" />
             </div>
             <div class="field">
-              <label>目标盘安全预留空间 (MB，防塞满损坏分区)</label>
+              <label>目标设备安全预留空间 (MB，防塞满掉盘)</label>
               <input type="number" id="reserveSpaceMB" min="50" max="50000" step="50" onchange="saveFields('custom')" />
             </div>
             <div class="field">
@@ -271,7 +346,7 @@
 
           <div class="params-grid" style="margin-top:4px;">
             <label class="check-row">
-              <span>强制回读 SHA-256 校验（防假写入/坏块）</span>
+              <span>磁盘回读 SHA-256 校验（防假写入/坏块）</span>
               <input type="checkbox" id="verifySha256" onchange="saveFields()" />
             </label>
             <label class="check-row">
@@ -279,12 +354,16 @@
               <input type="checkbox" id="smartFit" onchange="saveFields()" />
             </label>
             <label class="check-row">
-              <span>在目标盘保持原相对子目录结构</span>
+              <span>在目标设备保持原相对子目录结构</span>
               <input type="checkbox" id="preserveTree" onchange="saveFields()" />
             </label>
             <label class="check-row">
               <span>搬空后自动清理 PC 源目录里的空子文件夹</span>
               <input type="checkbox" id="cleanEmptyDirs" onchange="saveFields()" />
+            </label>
+            <label class="check-row" style="grid-column: 1 / -1;">
+              <span>MTP 手机极严模式：额外从手机回拷校验 SHA-256（会翻倍 USB 流量与发热，老手机建议关闭）</span>
+              <input type="checkbox" id="mtpReadbackVerify" onchange="saveFields()" />
             </label>
           </div>
         </div>
@@ -299,15 +378,15 @@
           </div>
 
           <div class="status-banner" id="statusBanner">
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-              <strong id="statusText" style="font-size:13.5px;">正在连接本地服务...</strong>
-              <span id="liveSpeed" style="font-size:12px; color:#60a5fa; font-variant-numeric:tabular-nums;"></span>
+            <div class="status-head">
+              <strong id="statusText" class="status-text">正在连接本地服务...</strong>
+              <span id="liveSpeed" class="status-speed">空闲 / 待命</span>
             </div>
-            <div id="currentFileArea" style="display:none; margin-top:8px;">
-              <div style="font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="currentFileName"></div>
+            <div id="currentFileArea" class="current-file-area" style="opacity:0.45;">
+              <div style="font-size:12px; line-height:17px; height:17px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="currentFileName">当前无传输中的文件</div>
               <div class="progress-track"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
-              <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums;">
-                <span id="currentFileBytes">0 / 0</span>
+              <div style="display:flex; justify-content:space-between; line-height:15px; height:15px; font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums;">
+                <span id="currentFileBytes">0 B / 0 B</span>
                 <span id="currentFilePercent">0%</span>
               </div>
             </div>
@@ -346,11 +425,36 @@
     </div>
   </div>
 
+  <!-- INSTANT IN-APP FOLDER BROWSER MODAL (Supports Local Drives + MTP Phones like Pixel) -->
+  <div class="modal-backdrop" id="folderModal" onclick="if (event.target === this) closeFolderBrowser()">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="modalTitle">浏览文件夹</h2>
+        <button class="btn" style="padding:5px 10px; font-size:12px;" onclick="closeFolderBrowser()">✕ 关闭</button>
+      </div>
+      <div class="modal-nav">
+        <button class="btn" id="btnBrowseUp" style="padding:5px 10px; font-size:12px;" onclick="browseUp()">⬆ 上一级</button>
+        <div class="crumbs" id="modalCrumbs"></div>
+        <button class="btn" style="padding:5px 10px; font-size:12px;" onclick="createNewFolderInBrowser()">＋ 新建</button>
+        <button class="btn" style="padding:5px 10px; font-size:12px;" onclick="loadBrowsePath(browseState.currentPath)">🔄</button>
+      </div>
+      <div class="modal-list" id="modalList"></div>
+      <div class="modal-foot">
+        <div style="font-size:12px; color:var(--muted); max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="modalFooterPath"></div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" id="btnOsPick" style="font-size:12px;" onclick="pickFolderNativeFallback()">系统弹窗选择</button>
+          <button class="btn btn-success" id="btnSelectCurFolder" onclick="confirmFolderBrowser()">✓ 选择当前文件夹</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let currentConfig = {};
     let currentState = {};
     let drivesCache = [];
     let formInitialized = false;
+    let browseState = { targetInputId: 'sourceDir', currentPath: '此电脑', parentPath: null, selectable: false };
 
     const PRESETS = {
       safe: { preset: 'safe', speedLimitMBs: 10, cooldownPerFileMs: 1500, batchCooldownMB: 300, batchCooldownSec: 5, reserveSpaceMB: 1024, verifySha256: true },
@@ -366,19 +470,30 @@
       return (b / 1024 ** 3).toFixed(2) + ' GB';
     }
 
+    function isMtpPathStr(p) {
+      const s = String(p || '').trim();
+      return /^此电脑\\/i.test(s) || /^computer\\/i.test(s) || /^mtp:\/\//i.test(s);
+    }
+
+    function updateMtpBanner() {
+      const val = document.getElementById('targetDir').value;
+      document.getElementById('mtpBanner').style.display = isMtpPathStr(val) ? 'block' : 'none';
+    }
+
     function syncFormFromConfig(cfg) {
       const ids = ['sourceDir','targetDir','speedLimitMBs','reserveSpaceMB','cooldownPerFileMs','batchCooldownMB','deleteMode','sortOrder'];
       for (const id of ids) {
         const el = document.getElementById(id);
         if (el && document.activeElement !== el && cfg[id] !== undefined) el.value = cfg[id];
       }
-      for (const id of ['verifySha256','smartFit','preserveTree','cleanEmptyDirs']) {
+      for (const id of ['verifySha256','smartFit','preserveTree','cleanEmptyDirs','mtpReadbackVerify']) {
         const el = document.getElementById(id);
         if (el && cfg[id] !== undefined) el.checked = Boolean(cfg[id]);
       }
       ['safe','balanced','fast'].forEach(p => {
         document.getElementById('preset-' + p)?.classList.toggle('active', cfg.preset === p);
       });
+      updateMtpBanner();
     }
 
     async function saveFields(forcePreset) {
@@ -395,13 +510,16 @@
         smartFit: document.getElementById('smartFit').checked,
         preserveTree: document.getElementById('preserveTree').checked,
         cleanEmptyDirs: document.getElementById('cleanEmptyDirs').checked,
+        mtpReadbackVerify: document.getElementById('mtpReadbackVerify').checked,
       };
       if (forcePreset) patch.preset = forcePreset;
+      updateMtpBanner();
       await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
       });
+      renderDrives();
     }
 
     async function applyPreset(name) {
@@ -415,58 +533,205 @@
       });
     }
 
-    async function pickFolder(inputId) {
-      const init = document.getElementById(inputId).value.trim();
-      const res = await fetch('/api/pick-folder', {
+    /* === Instant In-App Folder Browser === */
+    function openFolderBrowser(inputId) {
+      browseState.targetInputId = inputId;
+      const cur = document.getElementById(inputId).value.trim();
+      document.getElementById('modalTitle').textContent =
+        inputId === 'sourceDir' ? '选择 PC 源文件夹' : '选择移动设备目标文件夹（支持 MTP 手机）';
+      document.getElementById('btnOsPick').style.display = inputId === 'sourceDir' ? 'inline-flex' : 'inline-flex';
+      document.getElementById('folderModal').classList.add('open');
+      loadBrowsePath(cur || '此电脑');
+    }
+
+    function closeFolderBrowser() {
+      document.getElementById('folderModal').classList.remove('open');
+    }
+
+    async function loadBrowsePath(targetPath) {
+      const listEl = document.getElementById('modalList');
+      listEl.innerHTML = '<div style="padding:28px; text-align:center; color:var(--muted); font-size:13px;">正在读取目录...</div>';
+      try {
+        const res = await fetch('/api/browse?path=' + encodeURIComponent(targetPath || '此电脑'));
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || '读取失败');
+
+        browseState.currentPath = data.currentPath;
+        browseState.parentPath = data.parentPath;
+        browseState.selectable = Boolean(data.selectable);
+
+        document.getElementById('btnBrowseUp').disabled = !data.parentPath;
+        document.getElementById('btnSelectCurFolder').disabled = !data.selectable;
+        document.getElementById('modalFooterPath').textContent =
+          data.currentPath + (data.fileCount ? ` （含 ${data.fileCount} 个文件）` : '');
+
+        // Build clickable breadcrumb pills
+        const crumbsEl = document.getElementById('modalCrumbs');
+        if (data.currentPath === '此电脑') {
+          crumbsEl.innerHTML = '<button class="crumb" onclick="loadBrowsePath(\'此电脑\')">💻 此电脑</button>';
+        } else {
+          const parts = data.currentPath.replace(/\\+$/, '').split('\\').filter(Boolean);
+          const crumbs = [];
+          if (parts[0] === '此电脑') {
+            let acc = '';
+            parts.forEach((p, idx) => {
+              acc = idx === 0 ? p : acc + '\\' + p;
+              crumbs.push({ label: idx === 0 ? '💻 此电脑' : p, path: acc });
+            });
+          } else {
+            crumbs.push({ label: '💻 此电脑', path: '此电脑' });
+            let acc = '';
+            parts.forEach((p, idx) => {
+              acc = idx === 0 ? p + '\\' : acc.replace(/\\+$/, '') + '\\' + p;
+              crumbs.push({ label: p, path: acc });
+            });
+          }
+          crumbsEl.innerHTML = crumbs.map((c, idx) =>
+            `<button class="crumb" data-path="${escapeHtml(c.path)}" onclick="loadBrowsePath(this.dataset.path)">${escapeHtml(c.label)}</button>${idx < crumbs.length - 1 ? '<span style="opacity:.4">›</span>' : ''}`
+          ).join('');
+        }
+
+        if (!data.entries || data.entries.length === 0) {
+          listEl.innerHTML = '<div style="padding:32px; text-align:center; color:var(--muted); font-size:12.5px;">该目录下没有子文件夹（可直接点击右下角「选择当前文件夹」）</div>';
+          return;
+        }
+
+        listEl.innerHTML = data.entries.map(ent => {
+          const icon = ent.kind === 'mtp_root' ? '📱' : ent.kind === 'drive' ? '💾' : '📁';
+          const meta = ent.totalBytes > 0
+            ? `可用 ${fmtBytes(ent.freeBytes)} / ${fmtBytes(ent.totalBytes)}`
+            : (ent.kind === 'mtp_folder' ? '手机目录' : '文件夹');
+          return `
+            <button type="button" class="folder-row" data-path="${escapeHtml(ent.path)}" onclick="loadBrowsePath(this.dataset.path)">
+              <span class="folder-row-left">
+                <span>${icon}</span>
+                <span>${escapeHtml(ent.name)}</span>
+              </span>
+              <span class="folder-row-meta">${escapeHtml(meta)}</span>
+            </button>`;
+        }).join('');
+      } catch (err) {
+        // Fallback to 此电脑 root if typed path doesn't exist yet
+        if (targetPath && targetPath !== '此电脑') {
+          loadBrowsePath('此电脑');
+        } else {
+          listEl.innerHTML = `<div style="padding:24px; color:#f87171; font-size:12.5px;">读取失败：${escapeHtml(err.message)}</div>`;
+        }
+      }
+    }
+
+    function browseUp() {
+      if (browseState.parentPath) loadBrowsePath(browseState.parentPath);
+    }
+
+    async function createNewFolderInBrowser() {
+      if (!browseState.selectable) {
+        alert('请先进入具体磁盘或手机存储空间后再新建文件夹');
+        return;
+      }
+      const name = prompt('请输入新建文件夹名称：');
+      if (!name || !name.trim()) return;
+      const res = await fetch('/api/mkdir', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ initialDir: init }),
+        body: JSON.stringify({ parentPath: browseState.currentPath, name: name.trim() }),
       });
       const data = await res.json();
-      if (data.path) {
-        document.getElementById(inputId).value = data.path;
-        await saveFields();
-        renderDrives();
+      if (!data.ok) alert(data.error || '新建失败');
+      else loadBrowsePath(browseState.currentPath);
+    }
+
+    async function confirmFolderBrowser() {
+      if (!browseState.selectable) return;
+      document.getElementById(browseState.targetInputId).value = browseState.currentPath;
+      closeFolderBrowser();
+      await saveFields();
+    }
+
+    async function pickFolderNativeFallback() {
+      const btn = document.getElementById('btnOsPick');
+      const prev = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '请在系统窗口选择...';
+      try {
+        const init = document.getElementById(browseState.targetInputId).value.trim();
+        const res = await fetch('/api/pick-folder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ initialDir: init }),
+        });
+        const data = await res.json();
+        if (data.path) {
+          document.getElementById(browseState.targetInputId).value = data.path;
+          closeFolderBrowser();
+          await saveFields();
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = prev;
       }
     }
 
     async function loadDrives() {
-      const res = await fetch('/api/drives');
-      const data = await res.json();
-      drivesCache = data.drives || [];
-      renderDrives();
+      const btn = document.getElementById('btnRefreshDrives');
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch('/api/drives');
+        const data = await res.json();
+        drivesCache = data.drives || [];
+        renderDrives();
+      } finally {
+        if (btn) btn.disabled = false;
+      }
     }
 
     function selectDrive(drive) {
       const targetEl = document.getElementById('targetDir');
-      const sub = 'SafeMove_Backup';
-      targetEl.value = drive.letter + '\\' + sub;
-      fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetDir: targetEl.value, targetVolumeLabel: drive.label || '' }),
-      });
+      if (drive.isMtp) {
+        targetEl.value = drive.defaultTargetPath || drive.displayPath;
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetDir: targetEl.value, targetVolumeLabel: drive.deviceName }),
+        });
+      } else {
+        targetEl.value = drive.letter + '\\SafeMove_Backup';
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetDir: targetEl.value, targetVolumeLabel: drive.label || '' }),
+        });
+      }
+      updateMtpBanner();
       renderDrives();
     }
 
     function renderDrives() {
       const grid = document.getElementById('drivesGrid');
-      const currentTarget = (document.getElementById('targetDir').value || '').toUpperCase();
+      const currentTarget = (document.getElementById('targetDir').value || '').trim();
+      const upperTarget = currentTarget.toUpperCase();
       if (!drivesCache.length) {
-        grid.innerHTML = '<div style="font-size:12px;color:var(--muted);">未检测到可用磁盘</div>';
+        grid.innerHTML = '<div style="font-size:12px;color:var(--muted);">未检测到可用磁盘或便携设备</div>';
         return;
       }
       grid.innerHTML = drivesCache.map((d, idx) => {
         const usedPct = d.totalBytes > 0 ? Math.round(((d.totalBytes - d.freeBytes) / d.totalBytes) * 100) : 0;
-        const selected = currentTarget.startsWith(d.letter);
+        const isMtp = Boolean(d.isMtp);
         const isRem = d.driveType === 2;
+        const selected = isMtp
+          ? currentTarget.startsWith(d.displayPath)
+          : upperTarget.startsWith(d.letter);
+        const title = isMtp ? `📱 ${d.deviceName}` : `${d.letter} ${d.label || '未命名卷'}`;
+        const badgeCls = isMtp ? 'mtp' : (isRem ? '' : 'local');
+        const badgeText = isMtp ? 'MTP 手机' : (isRem ? '可移动' : '磁盘');
+        const barColor = usedPct > 90 ? '#ef4444' : isMtp ? '#06b6d4' : isRem ? '#10b981' : '#3b82f6';
         return `
-          <button type="button" class="drive-chip ${selected ? 'selected' : ''} ${isRem ? 'removable' : ''}" onclick="selectDrive(drivesCache[${idx}])">
+          <button type="button" class="drive-chip ${selected ? 'selected' : ''} ${isMtp ? 'mtp' : (isRem ? 'removable' : '')}" onclick="selectDrive(drivesCache[${idx}])">
             <div class="drive-head">
-              <span>${d.letter} ${d.label || '未命名卷'}</span>
-              <span class="drive-type ${isRem ? '' : 'local'}">${isRem ? '可移动' : '磁盘'}</span>
+              <span title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+              <span class="drive-type ${badgeCls}">${badgeText}</span>
             </div>
-            <div class="drive-bar"><div class="drive-bar-fill" style="width:${usedPct}%; background:${usedPct > 90 ? '#ef4444' : isRem ? '#10b981' : '#3b82f6'}"></div></div>
+            <div class="drive-bar"><div class="drive-bar-fill" style="width:${usedPct}%; background:${barColor}"></div></div>
             <div class="drive-meta">剩余 ${fmtBytes(d.freeBytes)} / ${fmtBytes(d.totalBytes)}</div>
           </button>`;
       }).join('');
@@ -479,8 +744,12 @@
       if (!data.ok) alert(data.error || '无法启动');
     }
 
-    async function stopTask() {
-      await fetch('/api/stop', { method: 'POST' });
+    async function stopTask(force = false) {
+      await fetch('/api/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: Boolean(force) }),
+      });
     }
 
     async function resetStats() {
@@ -493,9 +762,9 @@
       waiting_space: ['待命监测空间中', 'warn'],
       copying: ['平稳写入中', 'running'],
       syncing: ['fsync 强制落盘', 'running'],
-      verifying: ['回读校验 SHA-256', 'running'],
-      cooldown: ['主控冷却散热中', 'warn'],
-      disconnected: ['⚠️ 掉盘·等待重连', 'err'],
+      verifying: ['完整性校验中', 'running'],
+      cooldown: ['设备冷却散热中', 'warn'],
+      disconnected: ['⚠️ 设备离线·等待重连', 'err'],
       paused: ['已暂停', 'warn'],
     };
 
@@ -506,12 +775,12 @@
         syncFormFromConfig(cfg);
         formInitialized = true;
       } else {
-        // Keep preset highlight synced
         ['safe','balanced','fast'].forEach(p => {
           document.getElementById('preset-' + p)?.classList.toggle('active', cfg.preset === p);
         });
         if (document.activeElement !== document.getElementById('targetDir') && cfg.targetDir) {
           document.getElementById('targetDir').value = cfg.targetDir;
+          updateMtpBanner();
         }
       }
 
@@ -519,27 +788,47 @@
       document.getElementById('phaseLabel').textContent = label;
       document.getElementById('phaseDot').className = 'dot ' + dotCls;
       document.getElementById('btnStart').style.display = st.running ? 'none' : 'inline-flex';
-      document.getElementById('btnStop').style.display = st.running ? 'inline-flex' : 'none';
+      const btnStop = document.getElementById('btnStop');
+      const btnForce = document.getElementById('btnForceStop');
+      btnStop.style.display = st.running ? 'inline-flex' : 'none';
+      btnStop.disabled = Boolean(st.stopPending);
+      btnStop.textContent = st.stopPending ? '⏳ 正在安全停止...' : '⏹ 安全停止';
+      btnForce.style.display = st.running && st.stopPending ? 'inline-flex' : 'none';
 
       const banner = document.getElementById('statusBanner');
       banner.className = 'status-banner ' + (st.phase || '');
-      document.getElementById('statusText').textContent = st.statusText || '';
+      const statusTextEl = document.getElementById('statusText');
+      statusTextEl.textContent = st.statusText || '';
+      statusTextEl.title = st.statusText || '';
 
       const cf = st.currentFile;
       const cfArea = document.getElementById('currentFileArea');
+      cfArea.style.display = 'block';
       if (cf) {
-        cfArea.style.display = 'block';
-        document.getElementById('currentFileName').textContent = cf.relPath;
+        cfArea.style.opacity = '1';
+        const fnEl = document.getElementById('currentFileName');
+        fnEl.textContent = cf.relPath;
+        fnEl.title = cf.relPath;
         document.getElementById('progressFill').style.width = (cf.percent || 0) + '%';
         document.getElementById('currentFilePercent').textContent = (cf.percent || 0) + '%';
         const bytesShown = cf.phase === 'verifying' ? cf.verifiedBytes : cf.copiedBytes;
         document.getElementById('currentFileBytes').textContent =
-          (cf.phase === 'verifying' ? '已回读 ' : '已写入 ') + fmtBytes(bytesShown) + ' / ' + fmtBytes(cf.size);
+          (cf.phase === 'verifying' ? '已校验 ' : '已写入 ') + fmtBytes(bytesShown) + ' / ' + fmtBytes(cf.size);
         document.getElementById('liveSpeed').textContent =
-          cf.phase === 'copying' ? `${cf.speedMBs || 0} MB/s` : cf.phase === 'verifying' ? 'SHA-256 校验中' : 'fsync...';
+          cf.phase === 'copying'
+            ? (cf.speedMBs ? `${cf.speedMBs} MB/s` : '传输中...')
+            : cf.phase === 'verifying'
+              ? '完整性校验中'
+              : 'fsync...';
       } else {
-        cfArea.style.display = 'none';
-        document.getElementById('liveSpeed').textContent = '';
+        cfArea.style.opacity = '0.45';
+        const fnEl = document.getElementById('currentFileName');
+        fnEl.textContent = '当前无传输中的文件';
+        fnEl.title = '';
+        document.getElementById('progressFill').style.width = '0%';
+        document.getElementById('currentFileBytes').textContent = '0 B / 0 B';
+        document.getElementById('currentFilePercent').textContent = '0%';
+        document.getElementById('liveSpeed').textContent = st.running ? '等待中...' : '空闲 / 待命';
       }
 
       document.getElementById('statPending').textContent = (st.sourceStats?.pendingCount || 0) + ' 个';
@@ -550,11 +839,11 @@
         document.getElementById('statTargetFree').textContent = fmtBytes(td.freeBytes);
         document.getElementById('statTargetFree').style.color = '#34d399';
         document.getElementById('statTargetMeta').textContent =
-          `${td.letter} ${td.label || ''} · 总容量 ${fmtBytes(td.totalBytes)}`;
+          `${td.isMtp ? '📱 ' : td.letter + ' '}${td.label || ''} · 总容量 ${fmtBytes(td.totalBytes)}`;
       } else if (td && !td.online) {
         document.getElementById('statTargetFree').textContent = '离线';
         document.getElementById('statTargetFree').style.color = '#f87171';
-        document.getElementById('statTargetMeta').textContent = `${td.letter} 未连接或已掉盘`;
+        document.getElementById('statTargetMeta').textContent = `${td.label || td.letter} 未连接或已掉线`;
       } else {
         document.getElementById('statTargetFree').textContent = '--';
         document.getElementById('statTargetFree').style.color = 'var(--text)';
@@ -578,7 +867,7 @@
 
     // Boot
     loadDrives();
-    setInterval(loadDrives, 8000);
+    setInterval(loadDrives, 10000);
     const es = new EventSource('/api/events');
     es.onmessage = (ev) => {
       try {

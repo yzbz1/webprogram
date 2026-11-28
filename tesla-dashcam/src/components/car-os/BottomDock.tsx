@@ -119,10 +119,10 @@ export const BottomDock: React.FC<BottomDockProps> = ({
           <TeslaDashcamIcon className="w-6 h-6 text-white" recording />
         </DockAppButton>
 
-        {/* Map / Car Desktop */}
+        {/* V15 Reality View / Map Desktop */}
         <DockAppButton
           active={!dashcamOpen}
-          label="导航地图"
+          label="V15 实景主屏"
           onClick={onShowMap}
           iconBg="linear-gradient(145deg, #2563eb, #1d4ed8)"
         >

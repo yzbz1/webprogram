@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CarOsState, DashcamEvent } from './types/dashcam';
+import { DriveTelemetry, ViewMode } from './types/realityView';
 import { createDemoEvents } from './utils/demoData';
 import { TopStatusBar } from './components/car-os/TopStatusBar';
-import { CarDesktop } from './components/car-os/CarDesktop';
+import { RealityViewDesktop } from './components/reality/RealityViewDesktop';
 import { BottomDock } from './components/car-os/BottomDock';
 import { CarSettingsModal } from './components/car-os/CarSettingsModal';
 import { DashcamApp } from './components/dashcam/DashcamApp';
@@ -11,7 +12,7 @@ import { ImportDropzone } from './components/dashcam/ImportDropzone';
 export function App() {
   const [carState, setCarState] = useState<CarOsState>({
     theme: 'dark',
-    gear: 'P',
+    gear: 'D',
     batteryPercent: 82,
     rangeKm: 418,
     showPercent: true,
@@ -32,7 +33,9 @@ export function App() {
   );
   const [usbLoaded, setUsbLoaded] = useState(false);
 
-  const [dashcamOpen, setDashcamOpen] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>('world');
+  const [gamepadConnected, setGamepadConnected] = useState(false);
+  const [dashcamOpen, setDashcamOpen] = useState(false);
   const [dashcamFullscreen, setDashcamFullscreen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -176,6 +179,7 @@ export function App() {
           carState={carState}
           usbLoaded={usbLoaded}
           usbClipCount={events.length}
+          gamepadConnected={gamepadConnected}
           onToggleBatteryUnit={() => patchCar({ showPercent: !carState.showPercent })}
           onToggleLock={() => {
             patchCar({ locked: !carState.locked });
@@ -189,14 +193,23 @@ export function App() {
           onOpenImport={() => setImportOpen(true)}
         />
 
-        {/* Center Main Screen Stage: Car Desktop underneath + Floating/Fullscreen Dashcam Viewer */}
+        {/* Center Main Screen Stage: Tesla V15 3D Reality View + Floating Dashcam Viewer */}
         <main className="relative flex-1 flex min-h-0 overflow-hidden">
-          <CarDesktop
+          <RealityViewDesktop
             carState={carState}
             activeEvent={activeEvent}
             sentryCount={sentryCount}
-            onOpenDashcam={() => setDashcamOpen(true)}
+            paused={dashcamOpen || settingsOpen || importOpen}
+            viewMode={viewMode}
+            onChangeViewMode={setViewMode}
+            onTelemetryChange={(t: DriveTelemetry) => {
+              setCarState((prev) => (prev.gear === t.gear ? prev : { ...prev, gear: t.gear }));
+            }}
+            onGamepadChange={(conn) => setGamepadConnected(conn)}
+            onOpenDashcam={() => setDashcamOpen((o) => !o)}
             onOpenImport={() => setImportOpen(true)}
+            onOpenSettings={() => setSettingsOpen((s) => !s)}
+            onShowToast={showToast}
           />
 
           {dashcamOpen && (

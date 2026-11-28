@@ -128,6 +128,46 @@ export const VideoCard: React.FC<VideoCardProps> = ({
   const lastTapTimeRef = useRef(0);
   const activeStartTimeRef = useRef<number>(0);
   const finishSignaledRef = useRef(false);
+  const volumeCloseTimerRef = useRef<number | null>(null);
+  const isDraggingVolRef = useRef(false);
+  const volumeTrackRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (volumeCloseTimerRef.current) {
+        clearTimeout(volumeCloseTimerRef.current);
+      }
+    };
+  }, []);
+
+  const openVolumePop = useCallback(() => {
+    if (volumeCloseTimerRef.current) {
+      clearTimeout(volumeCloseTimerRef.current);
+      volumeCloseTimerRef.current = null;
+    }
+    setShowVolumePop(true);
+  }, []);
+
+  const scheduleCloseVolumePop = useCallback(() => {
+    if (isDraggingVolRef.current) return;
+    if (volumeCloseTimerRef.current) clearTimeout(volumeCloseTimerRef.current);
+    volumeCloseTimerRef.current = window.setTimeout(() => {
+      if (!isDraggingVolRef.current) {
+        setShowVolumePop(false);
+      }
+    }, 180);
+  }, []);
+
+  const updateVolumeFromPointer = useCallback(
+    (clientY: number) => {
+      const rect = volumeTrackRef.current?.getBoundingClientRect();
+      if (!rect || rect.height <= 0) return;
+      const ratio = 1 - (clientY - rect.top) / rect.height;
+      const next = Math.min(1, Math.max(0, Math.round(ratio * 100) / 100));
+      onVolumeChange(next);
+    },
+    [onVolumeChange]
+  );
 
   const effectiveRate = longPressBoost ? 2.0 : playbackRate;
   const isImagePost = item.mediaType === 'images';
@@ -909,8 +949,8 @@ export const VideoCard: React.FC<VideoCardProps> = ({
             {/* Volume Control */}
             <div
               className="relative flex items-center"
-              onMouseEnter={() => setShowVolumePop(true)}
-              onMouseLeave={() => setShowVolumePop(false)}
+              onMouseEnter={openVolumePop}
+              onMouseLeave={scheduleCloseVolumePop}
             >
               <button
                 type="button"
@@ -925,19 +965,59 @@ export const VideoCard: React.FC<VideoCardProps> = ({
                 )}
               </button>
               {showVolumePop && (
-                <div className="absolute bottom-10 left-1/2 -translate-x-1/2 px-3 py-3 rounded-xl bg-[#1a1c2a] border border-white/10 shadow-2xl flex flex-col items-center gap-2">
-                  <span className="text-[10px] tabular-nums opacity-70">
-                    {muted ? 0 : Math.round(volume * 100)}
-                  </span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={muted ? 0 : volume}
-                    onChange={(e) => onVolumeChange(Number(e.target.value))}
-                    className="w-20 accent-[#FE2C55] cursor-pointer"
-                  />
+                <div
+                  className="absolute bottom-full left-1/2 -translate-x-1/2 pb-2.5 z-40"
+                  onMouseEnter={openVolumePop}
+                  onMouseLeave={scheduleCloseVolumePop}
+                  onWheel={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const base = muted ? 0 : volume;
+                    const delta = e.deltaY < 0 ? 0.05 : -0.05;
+                    onVolumeChange(Math.min(1, Math.max(0, Number((base + delta).toFixed(2)))));
+                  }}
+                >
+                  <div className="w-11 py-3 px-2 rounded-xl bg-[#1a1c2a]/95 backdrop-blur-md border border-white/10 shadow-2xl flex flex-col items-center gap-2.5">
+                    <span className="text-[11px] font-medium tabular-nums text-white/85">
+                      {muted ? 0 : Math.round(volume * 100)}
+                    </span>
+                    <div
+                      ref={volumeTrackRef}
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        e.currentTarget.setPointerCapture(e.pointerId);
+                        isDraggingVolRef.current = true;
+                        openVolumePop();
+                        updateVolumeFromPointer(e.clientY);
+                      }}
+                      onPointerMove={(e) => {
+                        if (!isDraggingVolRef.current) return;
+                        updateVolumeFromPointer(e.clientY);
+                      }}
+                      onPointerUp={(e) => {
+                        if (!isDraggingVolRef.current) return;
+                        isDraggingVolRef.current = false;
+                        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                          e.currentTarget.releasePointerCapture(e.pointerId);
+                        }
+                      }}
+                      onPointerCancel={() => {
+                        isDraggingVolRef.current = false;
+                      }}
+                      className="h-24 w-6 flex items-center justify-center cursor-pointer touch-none"
+                    >
+                      <div className="w-1 h-full rounded-full bg-white/20 relative">
+                        <div
+                          className="absolute bottom-0 left-0 right-0 rounded-full bg-[#FE2C55]"
+                          style={{ height: `${(muted ? 0 : volume) * 100}%` }}
+                        />
+                        <div
+                          className="absolute left-1/2 -translate-x-1/2 translate-y-1/2 w-3 h-3 rounded-full bg-white shadow-md"
+                          style={{ bottom: `${(muted ? 0 : volume) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
